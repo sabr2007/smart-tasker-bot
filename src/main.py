@@ -4,6 +4,7 @@ from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 import difflib
 import re
+import os
 
 from telegram import (
     Update,
@@ -15,6 +16,7 @@ from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CallbackQueryHandler,
+    CommandHandler,
     filters,
     ContextTypes,
 )
@@ -24,13 +26,81 @@ from llm_client import parse_user_input
 from task_schema import TaskInterpretation
 import db  # твой db.py
 
+# ===== КОНСТАНТЫ =====
+ADMIN_USER_ID = 6113692933
+LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE)
+
+# ==== КОНСТАНТЫ ДЛЯ УТОЧНЕНИЯ ДЕДЛАЙНА =====
+
+NO_DEADLINE_PHRASES = {
+    "нет",
+    "не надо",
+    "без дедлайна",
+    "не нужен",
+    "не нужно",
+    "без срока",
+}
+
+TIME_HINT_WORDS = [
+    "сегодня",
+    "завтра",
+    "послезавтра",
+    "понедельник",
+    "вторник",
+    "среду",
+    "среда",
+    "четверг",
+    "пятницу",
+    "пятница",
+    "субботу",
+    "суббота",
+    "воскресенье",
+    "воскресенье",
+    "через",
+    "минут",
+    "минуту",
+    "час",
+    "часа",
+    "вечером",
+    "утром",
+    "днем",
+    "днём",
+    "ночью",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+]
+
+TASK_VERB_HINTS = [
+    "купить",
+    "сделать",
+    "сходить",
+    "выучить",
+    "скачать",
+    "помыть",
+    "позвонить",
+    "отправить",
+    "написать",
+    "доделать",
+    "сдать",
+    "прочитать",
+    "решить",
+]
+
 # ЛОГИ
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 
 # ==== КЛАВИАТУРЫ =====
 
@@ -57,7 +127,7 @@ def _normalize_ru_word(w: str) -> str:
     """
     w = w.lower()
     return re.sub(
-        r"(ому|ему|ого|ими|ыми|ами|ях|ах|ам|ой|ый|ий|ая|ое|ые|ую|ом|ев|ов|ей|ам|ами|ях)$",
+        r"(ому|ему|ого|ими|ыми|ами|лях|ях|ах|ам|ой|ый|ий|ая|ое|ые|ую|ом|ев|ов|ей|ами?)$",
         "",
         w,
     )
@@ -111,7 +181,27 @@ def find_task_by_hint(user_id: int, hint: str):
     return None
 
 
-# ==== ОТДЕЛЬНЫЕ ХЭЛПЕРЫ ДЛЯ ВЫВОДА СПИСКОВ =====
+def is_deadline_like(text: str) -> bool:
+    """
+    Грубая эвристика: похоже ли сообщение на ответ с датой/временем,
+    а не на новую задачу.
+    """
+    lower = text.lower()
+
+    # если есть типичный глагол-задача → считаем, что это новая задача
+    for v in TASK_VERB_HINTS:
+        if v in lower:
+            return False
+
+    # есть ли маркеры времени/даты
+    has_time_word = any(w in lower for w in TIME_HINT_WORDS)
+    has_time_pattern = bool(re.search(r"\d{1,2}:\d{2}", lower))
+    has_date_pattern = bool(re.search(r"\d{1,2}\.\d{1,2}(\.\d{2,4})?", lower))
+
+    return has_time_word or has_time_pattern or has_date_pattern
+
+
+# ==== ХЭЛПЕРЫ ДЛЯ НАПОМИНАНИЙ И СПИСКОВ =====
 
 async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -200,6 +290,7 @@ async def send_archive_list(chat_id: int, user_id: int, context: ContextTypes.DE
         reply_markup=MAIN_KEYBOARD,
     )
 
+
 def cancel_task_reminder(task_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Удаляет job напоминания по id задачи.
@@ -227,7 +318,6 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     text = data.get("text") or "задача"
     chat_id = job.chat_id
 
-    # Кнопка "Выполнено" — используем уже существующий обработчик done_task
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -245,6 +335,7 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=keyboard,
     )
 
+
 async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Ежедневный дайджест: в 07:30 отправляет всем список активных задач.
@@ -254,7 +345,6 @@ async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     for uid in user_ids:
-        # личный чат в TG = user_id
         await send_tasks_list(chat_id=uid, user_id=uid, context=context)
 
 
@@ -291,7 +381,76 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- 1. ИИ-парсинг обычного текста ---
+    # --- 1. Проверка: не ждём ли мы сейчас уточнение дедлайна по прошлой задаче ---
+    pending = context.user_data.get("pending_deadline")
+    if pending:
+        lower = text.lower().strip()
+
+        # 1) пользователь явно говорит, что дедлайн не нужен
+        if lower in NO_DEADLINE_PHRASES:
+            context.user_data.pop("pending_deadline", None)
+            await update.message.reply_text(
+                "Ок, оставляю задачу без дедлайна.",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        # 2) сообщение похоже на дату/время → пробуем вытащить дедлайн через LLM
+        if is_deadline_like(text):
+            try:
+                parsed = parse_user_input(text)
+            except Exception:
+                context.user_data.pop("pending_deadline", None)
+                await update.message.reply_text(
+                    "Я не смог нормально понять срок, оставляю задачу без дедлайна.",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+
+            if parsed.deadline_iso:
+                task_id = pending["task_id"]
+                task_text = pending["text"]
+
+                # обновляем дедлайн в базе
+                db.update_task_due(user_id, task_id, parsed.deadline_iso)
+
+                dt = datetime.fromisoformat(parsed.deadline_iso).astimezone(LOCAL_TZ)
+                new_time = dt.strftime("%d.%m %H:%M")
+
+                # ставим напоминание, если дедлайн в будущем
+                now = datetime.now(LOCAL_TZ)
+                if context.job_queue and dt > now:
+                    delay = (dt - now).total_seconds()
+                    context.job_queue.run_once(
+                        send_task_reminder,
+                        when=delay,
+                        chat_id=chat_id,
+                        name=f"reminder:{task_id}",
+                        data={"task_id": task_id, "text": task_text},
+                    )
+
+                await update.message.reply_text(
+                    f"⏰ Добавил дедлайн для «{task_text}»: {new_time}",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                context.user_data.pop("pending_deadline", None)
+                return
+            else:
+                # LLM не смог выдать нормальный ISO — безопасно отпускаем без дедлайна
+                context.user_data.pop("pending_deadline", None)
+                await update.message.reply_text(
+                    "Не получилось разобрать дату, оставляю задачу без дедлайна.",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+
+        # 3) сюда попадаем, если текст НЕ похож на ответ про срок
+        #    → считаем, что пользователь уже ушёл к новой задаче
+        #    старую оставляем без дедлайна и обрабатываем это сообщение как обычное
+        context.user_data.pop("pending_deadline", None)
+        # дальше пойдёт обычный парсинг через ИИ
+
+    # --- 2. ИИ-парсинг обычного текста ---
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     try:
@@ -303,23 +462,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- 2. Маршрутизация действий ---
+    # --- 3. Маршрутизация действий ---
 
     # СОЗДАНИЕ
     if ai_result.action == "create":
+        task_text = ai_result.title or ai_result.raw_input
+
         task_id = db.add_task(
             user_id,
-            ai_result.title or ai_result.raw_input,
+            task_text,
             ai_result.deadline_iso,
         )
 
-        response = f"✅ <b>Создано:</b> {ai_result.title or ai_result.raw_input}"
+        response = f"✅ <b>Создано:</b> {task_text}"
+        # есть дедлайн → сразу показываем и ставим напоминание
         if ai_result.deadline_iso:
             dt = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ)
             date_str = dt.strftime("%d.%m %H:%M")
             response += f"\n⏰ <b>Дедлайн:</b> {date_str}"
 
-            # --- ставим напоминание, если дедлайн в будущем ---
             now = datetime.now(LOCAL_TZ)
             if context.job_queue and dt > now:
                 delay = (dt - now).total_seconds()
@@ -328,15 +489,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     when=delay,
                     chat_id=chat_id,
                     name=f"reminder:{task_id}",
-                    data={"task_id": task_id, "text": ai_result.title or ai_result.raw_input},
+                    data={"task_id": task_id, "text": task_text},
                 )
 
+            await update.message.reply_text(
+                response,
+                parse_mode="HTML",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        # дедлайна нет → включаем режим уточнения
         await update.message.reply_text(
-            response,
+            response
+            + "\n\n"
+            + "🕒 Хочешь указать, к какому сроку это сделать?\n"
+              "• Можешь ответить так: «завтра», «в понедельник», «завтра в 18:00».\n"
+              "• Если дедлайн не нужен — напиши «без дедлайна» или «нет».",
             parse_mode="HTML",
             reply_markup=MAIN_KEYBOARD,
         )
 
+        # запоминаем, по какой задаче мы ждём срок
+        context.user_data["pending_deadline"] = {
+            "task_id": task_id,
+            "text": task_text,
+        }
+        return
 
     # ВЫПОЛНЕНИЕ / УДАЛЕНИЕ
     elif ai_result.action in ["complete", "delete"]:
@@ -349,8 +528,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         task_id, task_text = target
-        # --- отменяем напоминание, если было ---
+        # отменяем напоминание, если было
         cancel_task_reminder(task_id, context)
+
         if ai_result.action == "complete":
             db.set_task_done(user_id, task_id)
             await update.message.reply_text(
@@ -412,7 +592,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ПОКАЗАТЬ ЗАДАЧИ (через текст, а не кнопку)
     elif ai_result.action in ["show_active", "show_today"]:
-        # пока без фильтрации по "today" — просто выводим активные
+        # фильтр по "today" сделаем позже, пока просто все активные
         await send_tasks_list(chat_id, user_id, context)
 
     # НЕПОНЯТНО
@@ -472,7 +652,10 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user_id = query.from_user.id
+
+    # отменяем напоминание
     cancel_task_reminder(task_id, context)
+
     # найдём текст задачи, чтобы красиво показать
     tasks = db.get_tasks(user_id)
     task_text = None
@@ -494,6 +677,51 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_tasks_list(query.message.chat_id, user_id, context)
 
 
+# ==== АДМИН-КОМАНДЫ =====
+
+async def cmd_dumpdb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("Эта команда только для админа.")
+        return
+
+    db_path = db.DB_PATH if hasattr(db, "DB_PATH") else "tasks.db"
+    if not os.path.exists(db_path):
+        await update.message.reply_text("Файл базы данных не найден.")
+        return
+
+    await update.message.reply_document(
+        document=open(db_path, "rb"),
+        filename=os.path.basename(db_path),
+        caption="Дамп базы задач",
+    )
+
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("Эта команда только для админа.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Использование: /broadcast текст сообщения")
+        return
+
+    text = " ".join(context.args)
+    user_ids = db.get_users_with_active_tasks()
+    if not user_ids:
+        await update.message.reply_text("Нет пользователей с активными задачами.")
+        return
+
+    sent = 0
+    for uid in user_ids:
+        try:
+            await context.bot.send_message(chat_id=uid, text=text)
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Не удалось отправить broadcast пользователю {uid}: {e}")
+
+    await update.message.reply_text(f"Broadcast отправлен {sent} пользователям.")
+
+
 # ==== MAIN =====
 
 def main():
@@ -507,6 +735,10 @@ def main():
     # inline-кнопки
     app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
     app.add_handler(CallbackQueryHandler(on_mark_done_select, pattern=r"^done_task:\d+$"))
+
+    # команды админа
+    app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
 
     # --- УТРЕННИЙ ДАЙДЖЕСТ 07:30 ---
     if app.job_queue:
@@ -522,4 +754,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -4,7 +4,7 @@ import os
 from typing import List, Tuple, Optional
 from datetime import datetime
 
-# Берем путь к базе из .env или используем tasks.db по умолчанию
+
 DB_PATH = os.getenv("DB_PATH", "tasks.db")
 
 def get_connection():
@@ -19,7 +19,7 @@ def init_db():
     with get_connection() as conn:
         cursor = conn.cursor()
 
-        # 1. Таблица задач
+        
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -36,7 +36,7 @@ def init_db():
             """
         )
 
-        # 2. Таблица событий (логов)
+      
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
