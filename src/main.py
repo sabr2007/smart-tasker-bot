@@ -339,13 +339,6 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
         ),
     )
 
-    # 2) отдельное сообщение, чтобы вернуть нижнюю клавиатуру
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Меню",
-        reply_markup=MAIN_KEYBOARD,
-    )
-
 
 async def send_archive_list(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """
