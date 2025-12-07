@@ -178,6 +178,17 @@ def get_archived_tasks(user_id: int, limit: int = 10) -> List[Tuple[int, str, Op
         return cursor.fetchall()
 
 
+def clear_archived_tasks(user_id: int) -> None:
+    """Очищает архив выполненных задач пользователя."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM tasks WHERE user_id = ? AND status = 'done'",
+            (user_id,),
+        )
+        conn.commit()
+
+
 def log_event(user_id: int, event_type: str, task_id: Optional[int] = None, meta: Optional[dict] = None):
     """Пишет лог события."""
     meta_json = json.dumps(meta, ensure_ascii=False) if meta else None

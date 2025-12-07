@@ -476,7 +476,16 @@ async def send_archive_list(chat_id: int, user_id: int, context: ContextTypes.DE
         chat_id=chat_id,
         text=text,
         parse_mode="HTML",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Очистить архив",
+                        callback_data="clear_archive",
+                    )
+                ]
+            ]
+        ),
     )
 
 
@@ -1133,6 +1142,19 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_tasks_list(query.message.chat_id, user_id, context)
 
 
+async def on_clear_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Пользователь нажал кнопку очистки архива выполненных задач.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    db.clear_archived_tasks(user_id)
+
+    await query.edit_message_text("Архив очищен 🙂")
+
+
 # ==== ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ =====
 
 
@@ -1261,6 +1283,7 @@ def main():
     # inline-кнопки
     app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
     app.add_handler(CallbackQueryHandler(on_mark_done_select, pattern=r"^done_task:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_clear_archive, pattern=r"^clear_archive$"))
 
     # команды админа
     app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
