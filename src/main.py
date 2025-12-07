@@ -160,6 +160,41 @@ def _tokenize_meaningful(text: str) -> list[str]:
     return out
 
 
+def detect_rename_intent(text: str):
+    """
+    Пытается извлечь сигнал переименования задачи из фразы пользователя.
+    Возвращает словарь {"old_hint": str | None, "new_title": str} или None.
+    """
+    raw = text.strip()
+    lower = raw.lower()
+
+    patterns = [
+        # "вместо X задача называлась Y"
+        r"вместо\s+\"?(.+?)\"?\s+.*?наз\w+\s+\"?(.+?)\"?$",
+        # "переименуй X в Y"
+        r"переимен\w*\s+(?:задачу\s+)?\"?(.+?)\"?\s+в\s+\"?(.+?)\"?$",
+        # "поменяй X на Y"
+        r"поменя\w*\s+(?:задачу\s+)?\"?(.+?)\"?\s+на\s+\"?(.+?)\"?$",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, lower, flags=re.IGNORECASE)
+        if m and len(m.groups()) >= 2:
+            old_hint = m.group(1).strip(" «»\"'“”„")
+            new_title = m.group(2).strip(" «»\"'“”„")
+            if new_title:
+                return {"old_hint": old_hint or None, "new_title": new_title}
+
+    # "давай поменяем на Y" — без старого названия, используем target_task_hint позже
+    m = re.search(r"поменя\w*\s+.*?\s+на\s+\"?(.+?)\"?$", lower, flags=re.IGNORECASE)
+    if m:
+        new_title = m.group(1).strip(" «»\"'“”„")
+        if new_title:
+            return {"old_hint": None, "new_title": new_title}
+
+    return None
+
+
 def find_task_by_hint(user_id: int, hint: str):
     """
     Пытается найти задачу по текстовой подсказке.
@@ -641,7 +676,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- 3. Маршрутизация действий ---
+    # --- 3. Попытка распознать переименование задачи (пока без отдельного action) ---
+    rename_intent = detect_rename_intent(text)
+    if rename_intent:
+        target_hint = rename_intent["old_hint"] or ai_result.target_task_hint or ""
+        target = find_task_by_hint(user_id, target_hint)
+        if not target:
+            await update.message.reply_text(
+                f"🤷‍♂️ Не нашел задачу, похожую на «{target_hint or 'это'}». Попробуй точнее.",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        task_id, _task_text = target
+        new_title = rename_intent["new_title"]
+        db.update_task_text(user_id, task_id, new_title)
+        await update.message.reply_text(
+            f"✏️ Переименовал задачу: <b>{new_title}</b>",
+            parse_mode="HTML",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+
+    # --- 4. Маршрутизация действий ---
 
     # СОЗДАНИЕ
     if ai_result.action == "create":

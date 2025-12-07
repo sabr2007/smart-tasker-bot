@@ -122,6 +122,17 @@ def update_task_due(user_id: int, task_id: int, due_at_iso: Optional[str]):
         conn.commit()
 
 
+def update_task_text(user_id: int, task_id: int, new_text: str):
+    """Обновляет текст задачи."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET text = ? WHERE id = ? AND user_id = ?",
+            (new_text, task_id, user_id),
+        )
+        conn.commit()
+
+
 def delete_task(user_id: int, task_id: int):
     """Удаляет задачу (физически)."""
     with get_connection() as conn:
