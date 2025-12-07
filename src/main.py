@@ -1,6 +1,6 @@
 # src/main.py
 import logging
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, date
 from zoneinfo import ZoneInfo
 import difflib
 import re
@@ -55,17 +55,22 @@ TIME_HINT_WORDS = [
     "субботу",
     "суббота",
     "воскресенье",
-    "воскресенье",
     "через",
     "минут",
     "минуту",
     "час",
     "часа",
     "вечером",
+    "вечер",
+    "вечера",
     "утром",
+    "утро",
+    "утра",
     "днем",
     "днём",
     "ночью",
+    "ночь",
+    "ночи",
     "января",
     "февраля",
     "марта",
@@ -283,7 +288,26 @@ def is_deadline_like(text: str) -> bool:
     has_time_pattern = bool(re.search(r"\d{1,2}:\d{2}", lower))
     has_date_pattern = bool(re.search(r"\d{1,2}\.\d{1,2}(\.\d{2,4})?", lower))
 
-    return has_time_word or has_time_pattern or has_date_pattern
+    # хак: "в 9 вечера/утра/ночи" без двоеточия
+    has_hour_with_part_of_day = bool(
+        re.search(r"\b\d{1,2}\b", lower)
+        and any(
+            w in lower
+            for w in [
+                "вечер",
+                "вечера",
+                "вечером",
+                "утро",
+                "утра",
+                "утром",
+                "ночь",
+                "ночи",
+                "ночью",
+            ]
+        )
+    )
+
+    return has_time_word or has_time_pattern or has_date_pattern or has_hour_with_part_of_day
 
 
 def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
@@ -302,6 +326,60 @@ def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str 
         if dt.date() == target_date:
             result.append((t_id, text, due))
     return result
+
+
+MONTHS_RU = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+
+
+def parse_explicit_date(text: str) -> date | None:
+    """
+    Пытается вытащить дату вида "9 декабря" из текста.
+    Возвращает date или None.
+    """
+    lower = text.lower()
+    m = re.search(
+        r"\b(\d{1,2})\s+("
+        r"января|февраля|марта|апреля|мая|июня|"
+        r"июля|августа|сентября|октября|ноября|декабря"
+        r")\b",
+        lower,
+    )
+    if not m:
+        return None
+
+    day_str, month_word = m.groups()
+    day = int(day_str)
+    month = MONTHS_RU[month_word]
+
+    now = datetime.now(LOCAL_TZ)
+    year = now.year
+
+    try:
+        dt = date(year, month, day)
+    except ValueError:
+        return None
+
+    # Если дата уже прошла в этом году — считаем, что речь о следующем
+    if dt < now.date():
+        try:
+            dt = date(year + 1, month, day)
+        except ValueError:
+            return None
+
+    return dt
 
 
 # ==== ХЭЛПЕРЫ ДЛЯ НАПОМИНАНИЙ И СПИСКОВ =====
@@ -644,16 +722,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 2. ИИ-парсинг обычного текста ---
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    # Быстрая эвристика: если спрашивают "что/есть ли на завтра/сегодня"
+    # Быстрая эвристика: если спрашивают "что/есть ли на завтра/сегодня/конкретную дату"
     lower_text = text.lower()
-    question_like = any(q in lower_text for q in ["что у меня", "что по", "есть ли", "что на", "какие задачи", "есть что-то"])
-    if question_like and any(w in lower_text for w in ["завтра", "сегодня", "утром", "вечером", "днем", "днём"]):
-        target_date = None
+    question_like = any(
+        q in lower_text
+        for q in ["что у меня", "что по", "есть ли", "что на", "какие задачи", "есть что-то"]
+    )
+
+    if question_like:
         now = datetime.now(LOCAL_TZ)
+        target_date = None
+
         if "завтра" in lower_text:
             target_date = (now + timedelta(days=1)).date()
-        elif "сегодня" in lower_text:
+        elif "сегодня" in lower_text or "на сегодня" in lower_text:
             target_date = now.date()
+        else:
+            # пробуем вытащить явную дату типа "9 декабря"
+            explicit = parse_explicit_date(lower_text)
+            if explicit:
+                target_date = explicit
+
         if target_date:
             tasks_for_day = filter_tasks_by_date(user_id, target_date)
             if tasks_for_day:
