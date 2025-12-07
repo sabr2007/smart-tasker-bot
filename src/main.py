@@ -173,8 +173,8 @@ def detect_rename_intent(text: str):
         r"вместо\s+\"?(.+?)\"?\s+.*?наз\w+\s+\"?(.+?)\"?$",
         # "переименуй X в Y"
         r"переимен\w*\s+(?:задачу\s+)?\"?(.+?)\"?\s+в\s+\"?(.+?)\"?$",
-        # "поменяй X на Y"
-        r"поменя\w*\s+(?:задачу\s+)?\"?(.+?)\"?\s+на\s+\"?(.+?)\"?$",
+        # "поменяй X на Y" / "поменяем X на Y"
+        r"(?:задачу\s+)?\"?(.+?)\"?\s+(?:давай\s+)?поменя\w*\s+на\s+\"?(.+?)\"?$",
     ]
 
     for pat in patterns:
@@ -185,12 +185,16 @@ def detect_rename_intent(text: str):
             if new_title:
                 return {"old_hint": old_hint or None, "new_title": new_title}
 
-    # "давай поменяем на Y" — без старого названия, используем target_task_hint позже
-    m = re.search(r"поменя\w*\s+.*?\s+на\s+\"?(.+?)\"?$", lower, flags=re.IGNORECASE)
+    # fallback: "поменяем на Y" — без старого названия, используем target_task_hint позже
+    m = re.search(r"поменя\w*\s+(?:.*?\s+)?на\s+\"?(.+?)\"?$", lower, flags=re.IGNORECASE)
     if m:
         new_title = m.group(1).strip(" «»\"'“”„")
         if new_title:
-            return {"old_hint": None, "new_title": new_title}
+            # Попробуем вытащить старый хинт как всё до слова "помен"
+            idx = lower.find("помен")
+            old_part = lower[:idx].strip(" «»\"'“”„")
+            old_hint = old_part if old_part else None
+            return {"old_hint": old_hint, "new_title": new_title}
 
     return None
 
@@ -679,7 +683,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 3. Попытка распознать переименование задачи (пока без отдельного action) ---
     rename_intent = detect_rename_intent(text)
     if rename_intent:
-        target_hint = rename_intent["old_hint"] or ai_result.target_task_hint or ""
+        target_hint = (
+            rename_intent["old_hint"]
+            or ai_result.target_task_hint
+            or ai_result.title
+            or ""
+        )
         target = find_task_by_hint(user_id, target_hint)
         if not target:
             await update.message.reply_text(
