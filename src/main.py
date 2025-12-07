@@ -1,6 +1,6 @@
 # src/main.py
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 import difflib
 import re
@@ -96,6 +96,21 @@ TASK_VERB_HINTS = [
     "решить",
 ]
 
+STOP_WORDS = {
+    "по",
+    "про",
+    "к",
+    "в",
+    "на",
+    "за",
+    "до",
+    "от",
+    "с",
+    "со",
+    "без",
+    "для",
+}
+
 # ЛОГИ
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -133,6 +148,18 @@ def _normalize_ru_word(w: str) -> str:
     )
 
 
+def _tokenize_meaningful(text: str) -> list[str]:
+    tokens = re.findall(r"\w+", text.lower())
+    out = []
+    for t in tokens:
+        if t in STOP_WORDS:
+            continue
+        norm = _normalize_ru_word(t)
+        if norm:
+            out.append(norm)
+    return out
+
+
 def find_task_by_hint(user_id: int, hint: str):
     """
     Пытается найти задачу по текстовой подсказке.
@@ -157,25 +184,31 @@ def find_task_by_hint(user_id: int, hint: str):
         return None
 
     # 2) fuzzy по нормализованным словам
-    hint_norm = _normalize_ru_word(hint_lower)
-    if not hint_norm:
+    hint_tokens = _tokenize_meaningful(hint_lower)
+    if not hint_tokens:
         return None
 
     best: tuple[int, str] | None = None
     best_score = 0.0
-
     for t_id, t_text, _ in tasks:
-        words = re.findall(r"\w+", t_text.lower())
-        for w in words:
-            w_norm = _normalize_ru_word(w)
-            if not w_norm:
-                continue
-            score = difflib.SequenceMatcher(None, hint_norm, w_norm).ratio()
-            if score > best_score:
-                best_score = score
-                best = (t_id, t_text)
+        task_tokens = _tokenize_meaningful(t_text)
+        if not task_tokens:
+            continue
 
-    if best and best_score >= 0.7:
+        # пересечение смысловых токенов
+        overlap = len(set(hint_tokens) & set(task_tokens))
+        if overlap >= 2:
+            return (t_id, t_text)
+
+        # fuzzy по объединённой строке нормализованных слов
+        task_join = " ".join(task_tokens)
+        hint_join = " ".join(hint_tokens)
+        score = difflib.SequenceMatcher(None, hint_join, task_join).ratio()
+        if score > best_score:
+            best_score = score
+            best = (t_id, t_text)
+
+    if best and best_score >= 0.55:
         return best
 
     return None
@@ -199,6 +232,24 @@ def is_deadline_like(text: str) -> bool:
     has_date_pattern = bool(re.search(r"\d{1,2}\.\d{1,2}(\.\d{2,4})?", lower))
 
     return has_time_word or has_time_pattern or has_date_pattern
+
+
+def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
+    """
+    Возвращает задачи, дедлайн которых совпадает с датой target_date (в локальной TZ).
+    """
+    tasks = db.get_tasks(user_id)
+    result = []
+    for t_id, text, due in tasks:
+        if not due:
+            continue
+        try:
+            dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+        except Exception:
+            continue
+        if dt.date() == target_date:
+            result.append((t_id, text, due))
+    return result
 
 
 # ==== ХЭЛПЕРЫ ДЛЯ НАПОМИНАНИЙ И СПИСКОВ =====
@@ -424,6 +475,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- 1. Проверка: не ждём ли мы сейчас уточнение дедлайна по прошлой задаче ---
     pending = context.user_data.get("pending_deadline")
+    pending_reschedule = context.user_data.get("pending_reschedule")
     if pending:
         lower = text.lower().strip()
 
@@ -488,8 +540,97 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_deadline", None)
         # дальше пойдёт обычный парсинг через ИИ
 
+    if pending_reschedule:
+        lower = text.lower().strip()
+
+        if lower in NO_DEADLINE_PHRASES:
+            context.user_data.pop("pending_reschedule", None)
+            await update.message.reply_text(
+                "Ок, перенос отменяю, дедлайн не меняю.",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        if is_deadline_like(text):
+            try:
+                parsed = parse_user_input(text)
+            except Exception:
+                context.user_data.pop("pending_reschedule", None)
+                await update.message.reply_text(
+                    "Не смог понять новую дату, перенос отменён.",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+
+            if parsed.deadline_iso:
+                task_id = pending_reschedule["task_id"]
+                task_text = pending_reschedule["text"]
+
+                cancel_task_reminder(task_id, context)
+                db.update_task_due(user_id, task_id, parsed.deadline_iso)
+
+                schedule_task_reminder(
+                    context.job_queue,
+                    task_id=task_id,
+                    task_text=task_text,
+                    deadline_iso=parsed.deadline_iso,
+                    chat_id=chat_id,
+                )
+
+                dt = datetime.fromisoformat(parsed.deadline_iso).astimezone(LOCAL_TZ)
+                new_time = dt.strftime("%d.%m %H:%M")
+                await update.message.reply_text(
+                    f"🔄 Перенёс «{task_text}» на {new_time}",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                context.user_data.pop("pending_reschedule", None)
+                return
+            else:
+                context.user_data.pop("pending_reschedule", None)
+                await update.message.reply_text(
+                    "Не получилось разобрать дату, перенос отменён.",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+
+        # если не похоже на дату — прекращаем режим переноса
+        context.user_data.pop("pending_reschedule", None)
+
     # --- 2. ИИ-парсинг обычного текста ---
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+    # Быстрая эвристика: если спрашивают "что/есть ли на завтра/сегодня"
+    lower_text = text.lower()
+    question_like = any(q in lower_text for q in ["что у меня", "что по", "есть ли", "что на", "какие задачи", "есть что-то"])
+    if question_like and any(w in lower_text for w in ["завтра", "сегодня", "утром", "вечером", "днем", "днём"]):
+        target_date = None
+        now = datetime.now(LOCAL_TZ)
+        if "завтра" in lower_text:
+            target_date = (now + timedelta(days=1)).date()
+        elif "сегодня" in lower_text:
+            target_date = now.date()
+        if target_date:
+            tasks_for_day = filter_tasks_by_date(user_id, target_date)
+            if tasks_for_day:
+                lines = []
+                for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
+                    try:
+                        dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                        d_str = dt.strftime("%d.%m %H:%M")
+                        lines.append(f"{i}. {txt} (до {d_str})")
+                    except Exception:
+                        lines.append(f"{i}. {txt}")
+                await update.message.reply_text(
+                    "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+            else:
+                await update.message.reply_text(
+                    "На этот день задач нет 🙂",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
 
     try:
         ai_result: TaskInterpretation = parse_user_input(text)
@@ -594,9 +735,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id, task_text = target
         if not ai_result.deadline_iso:
             await update.message.reply_text(
-                "🤔 Я понял, что надо перенести, но не понял НА КОГДА.",
+                "🤔 Я понял, что надо перенести, но не понял НА КОГДА. Напиши, например: «завтра в 18:00» или «в понедельник». Если передумал — скажи «нет».",
                 reply_markup=MAIN_KEYBOARD,
             )
+            context.user_data["pending_reschedule"] = {
+                "task_id": task_id,
+                "text": task_text,
+            }
             return
 
         # снимаем старое напоминание
