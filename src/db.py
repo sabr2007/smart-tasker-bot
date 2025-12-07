@@ -11,6 +11,7 @@ def get_connection():
     """Создает подключение к базе данных."""
     return sqlite3.connect(DB_PATH)
 
+
 def init_db():
     """
     Создаёт таблицы tasks и events, если они не существуют.
@@ -190,6 +191,7 @@ def log_event(user_id: int, event_type: str, task_id: Optional[int] = None, meta
             (user_id, event_type, task_id, meta_json),
         )
         conn.commit()
+
 
 def get_users_with_active_tasks() -> list[int]:
     """

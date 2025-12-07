@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, DEFAULT_TIMEZONE
-from llm_client import parse_user_input
+from llm_client import parse_user_input, render_user_reply
 from task_schema import TaskInterpretation
 import db  # твой db.py
 
@@ -116,6 +116,16 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+def safe_render_user_reply(event: dict) -> str:
+    """Безопасный обёртчик над render_user_reply, чтобы не падать из-за LLM."""
+    try:
+        return render_user_reply(event)
+    except Exception as e:
+        logger.exception("render_user_reply failed: %s", e)
+        return "Операцию сделал, но не смог красиво сформулировать ответ 🙂"
+
 
 # ==== КЛАВИАТУРЫ =====
 
@@ -664,8 +674,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+    tasks_snapshot = db.get_tasks(user_id)
+
     try:
-        ai_result: TaskInterpretation = parse_user_input(text)
+        ai_result: TaskInterpretation = parse_user_input(text, tasks_snapshot=tasks_snapshot)
     except Exception as e:
         await update.message.reply_text(
             f"🤯 Мозг сломался: {e}",
@@ -712,13 +724,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_result.deadline_iso,
         )
 
-        response = f"✅ <b>Создано:</b> {task_text}"
-        # есть дедлайн → сразу показываем и ставим напоминание
-        if ai_result.deadline_iso:
-            dt = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ)
-            date_str = dt.strftime("%d.%m %H:%M")
-            response += f"\n⏰ <b>Дедлайн:</b> {date_str}"
+        event = {
+            "type": "task_created",
+            "task_text": task_text,
+            "deadline_iso": ai_result.deadline_iso,
+            "prev_deadline_iso": None,
+            "num_active_tasks": len(db.get_tasks(user_id)),
+            "language": "ru",
+            "extra": {},
+        }
 
+        reply_text = safe_render_user_reply(event)
+
+        await update.message.reply_text(
+            reply_text,
+            parse_mode="HTML",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+        # есть дедлайн → сразу ставим напоминание
+        if ai_result.deadline_iso:
             schedule_task_reminder(
                 context.job_queue,
                 task_id=task_id,
@@ -726,40 +751,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 deadline_iso=ai_result.deadline_iso,
                 chat_id=chat_id,
             )
-
-            await update.message.reply_text(
-                response,
-                parse_mode="HTML",
-                reply_markup=MAIN_KEYBOARD,
-            )
             return
 
         # дедлайна нет → включаем режим уточнения
-        await update.message.reply_text(
-            response
-            + "\n\n"
-            + "🕒 Хочешь указать, к какому сроку это сделать?\n"
-              "• Можешь ответить так: «завтра», «в понедельник», «завтра в 18:00».\n"
-              "• Если дедлайн не нужен — напиши «без дедлайна» или «нет».",
-            parse_mode="HTML",
-            reply_markup=MAIN_KEYBOARD,
-        )
-
-        # запоминаем, по какой задаче мы ждём срок
         context.user_data["pending_deadline"] = {
             "task_id": task_id,
             "text": task_text,
         }
+        await update.message.reply_text(
+            "🕒 Хочешь указать срок? Можешь ответить так: «завтра», «в понедельник», «завтра в 18:00». "
+            "Если дедлайн не нужен — напиши «нет» или «без дедлайна».",
+            reply_markup=MAIN_KEYBOARD,
+        )
         return
 
     # ВЫПОЛНЕНИЕ / УДАЛЕНИЕ
     elif ai_result.action in ["complete", "delete"]:
         target = find_task_by_hint(user_id, ai_result.target_task_hint or "")
         if not target:
-            await update.message.reply_text(
-                f"🤷‍♂️ Не нашел задачу, похожую на «{ai_result.target_task_hint}». Попробуй точнее.",
-                reply_markup=MAIN_KEYBOARD,
-            )
+            event = {
+                "type": "task_not_found",
+                "task_text": None,
+                "deadline_iso": None,
+                "prev_deadline_iso": None,
+                "num_active_tasks": len(db.get_tasks(user_id)),
+                "language": "ru",
+                "extra": {"user_query": ai_result.target_task_hint},
+            }
+            reply_text = safe_render_user_reply(event)
+            await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
             return
 
         task_id, task_text = target
@@ -768,27 +788,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if ai_result.action == "complete":
             db.set_task_done(user_id, task_id)
-            await update.message.reply_text(
-                f"👍 Отметил выполненным: <b>{task_text}</b>",
-                parse_mode="HTML",
-                reply_markup=MAIN_KEYBOARD,
-            )
+            event = {
+                "type": "task_completed",
+                "task_text": task_text,
+                "deadline_iso": None,
+                "prev_deadline_iso": None,
+                "num_active_tasks": len(db.get_tasks(user_id)),
+                "language": "ru",
+                "extra": {},
+            }
         else:
             db.delete_task(user_id, task_id)
-            await update.message.reply_text(
-                f"🗑 Удалил задачу: <b>{task_text}</b>",
-                parse_mode="HTML",
-                reply_markup=MAIN_KEYBOARD,
-            )
+            event = {
+                "type": "task_deleted",
+                "task_text": task_text,
+                "deadline_iso": None,
+                "prev_deadline_iso": None,
+                "num_active_tasks": len(db.get_tasks(user_id)),
+                "language": "ru",
+                "extra": {},
+            }
+
+        reply_text = safe_render_user_reply(event)
+        await update.message.reply_text(
+            reply_text,
+            parse_mode="HTML",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
     # ПЕРЕНОС
     elif ai_result.action == "reschedule":
         target = find_task_by_hint(user_id, ai_result.target_task_hint or "")
         if not target:
-            await update.message.reply_text(
-                f"🤷‍♂️ Не нашел задачу «{ai_result.target_task_hint}» для переноса.",
-                reply_markup=MAIN_KEYBOARD,
-            )
+            event = {
+                "type": "task_not_found",
+                "task_text": None,
+                "deadline_iso": None,
+                "prev_deadline_iso": None,
+                "num_active_tasks": len(db.get_tasks(user_id)),
+                "language": "ru",
+                "extra": {"user_query": ai_result.target_task_hint},
+            }
+            reply_text = safe_render_user_reply(event)
+            await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
             return
 
         task_id, task_text = target
@@ -806,10 +848,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # снимаем старое напоминание
         cancel_task_reminder(task_id, context)
 
-        db.update_task_due(user_id, task_id, ai_result.deadline_iso)
+        prev_task = db.get_task(user_id, task_id)
+        prev_deadline = prev_task[2] if prev_task else None
 
-        dt = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ)
-        new_time = dt.strftime("%d.%m %H:%M")
+        db.update_task_due(user_id, task_id, ai_result.deadline_iso)
 
         # ставим новое напоминание
         schedule_task_reminder(
@@ -820,8 +862,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=chat_id,
         )
 
+        event = {
+            "type": "task_rescheduled",
+            "task_text": task_text,
+            "deadline_iso": ai_result.deadline_iso,
+            "prev_deadline_iso": prev_deadline,
+            "num_active_tasks": len(db.get_tasks(user_id)),
+            "language": "ru",
+            "extra": {},
+        }
+        reply_text = safe_render_user_reply(event)
+
         await update.message.reply_text(
-            f"🔄 Перенес «{task_text}» на <b>{new_time}</b>",
+            reply_text,
             parse_mode="HTML",
             reply_markup=MAIN_KEYBOARD,
         )
@@ -831,10 +884,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # фильтр по "today" сделаем позже, пока просто все активные
         await send_tasks_list(chat_id, user_id, context)
 
+        tasks_now = db.get_tasks(user_id)
+        event = {
+            "type": "show_tasks" if tasks_now else "no_tasks",
+            "task_text": None,
+            "deadline_iso": None,
+            "prev_deadline_iso": None,
+            "num_active_tasks": len(tasks_now),
+            "language": "ru",
+            "extra": {"mode": ai_result.action},
+        }
+        reply_text = safe_render_user_reply(event)
+        await update.message.reply_text(
+            reply_text,
+            reply_markup=MAIN_KEYBOARD,
+        )
+
     # НЕПОНЯТНО
     elif ai_result.action == "unknown":
+        event = {
+            "type": "error",
+            "task_text": None,
+            "deadline_iso": None,
+            "prev_deadline_iso": None,
+            "num_active_tasks": len(db.get_tasks(user_id)),
+            "language": "ru",
+            "extra": {"reason": "unknown_intent"},
+        }
+        reply_text = safe_render_user_reply(event)
         await update.message.reply_text(
-            "Я умею только в задачи. Попроси меня напомнить о чем-нибудь! 🤖",
+            reply_text,
             reply_markup=MAIN_KEYBOARD,
         )
 
