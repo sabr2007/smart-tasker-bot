@@ -247,7 +247,7 @@ def find_task_by_hint(user_id: int, hint: str):
             best_score = score
             best = (t_id, t_text)
 
-    if best and best_score >= 0.55:
+    if best and best_score >= 0.5:
         return best
 
     return None
