@@ -195,3 +195,24 @@ def get_users_with_active_tasks() -> list[int]:
         )
         rows = cursor.fetchall()
         return [row[0] for row in rows]
+
+
+def get_active_tasks_with_future_due(now_iso: str):
+    """
+    Возвращает активные задачи с дедлайном в будущем.
+    Используется для восстановления напоминаний после рестарта.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, text, due_at
+            FROM tasks
+            WHERE (status IS NULL OR status = 'active')
+              AND due_at IS NOT NULL
+              AND due_at > ?
+            ORDER BY due_at ASC
+            """,
+            (now_iso,),
+        )
+        return cursor.fetchall()

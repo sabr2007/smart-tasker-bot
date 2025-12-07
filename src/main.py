@@ -348,6 +348,47 @@ async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_tasks_list(chat_id=uid, user_id=uid, context=context)
 
 
+def schedule_task_reminder(job_queue, task_id: int, task_text: str, deadline_iso: str | None, chat_id: int):
+    """
+    Ставит напоминание в job_queue, если дедлайн в будущем и данные валидны.
+    Используется как при создании/переносе задач, так и при восстановлении после рестарта.
+    """
+    if not job_queue or not deadline_iso:
+        return
+
+    try:
+        dt = datetime.fromisoformat(deadline_iso).astimezone(LOCAL_TZ)
+    except Exception:
+        return
+
+    now = datetime.now(LOCAL_TZ)
+    if dt <= now:
+        return
+
+    delay = (dt - now).total_seconds()
+    job_queue.run_once(
+        send_task_reminder,
+        when=delay,
+        chat_id=chat_id,
+        name=f"reminder:{task_id}",
+        data={"task_id": task_id, "text": task_text},
+    )
+
+
+def restore_reminders(job_queue):
+    """
+    После рестарта бота восстанавливает напоминания по активным задачам с будущими дедлайнами.
+    """
+    if not job_queue:
+        return
+
+    now_iso = datetime.now(LOCAL_TZ).isoformat()
+    tasks = db.get_active_tasks_with_future_due(now_iso)
+
+    for task_id, user_id, text, due_at in tasks:
+        schedule_task_reminder(job_queue, task_id, text, due_at, chat_id=user_id)
+
+
 # ==== ОСНОВНОЙ ХЭНДЛЕР ТЕКСТА =====
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -418,16 +459,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 new_time = dt.strftime("%d.%m %H:%M")
 
                 # ставим напоминание, если дедлайн в будущем
-                now = datetime.now(LOCAL_TZ)
-                if context.job_queue and dt > now:
-                    delay = (dt - now).total_seconds()
-                    context.job_queue.run_once(
-                        send_task_reminder,
-                        when=delay,
-                        chat_id=chat_id,
-                        name=f"reminder:{task_id}",
-                        data={"task_id": task_id, "text": task_text},
-                    )
+                schedule_task_reminder(
+                    context.job_queue,
+                    task_id=task_id,
+                    task_text=task_text,
+                    deadline_iso=parsed.deadline_iso,
+                    chat_id=chat_id,
+                )
 
                 await update.message.reply_text(
                     f"⏰ Добавил дедлайн для «{task_text}»: {new_time}",
@@ -481,16 +519,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             date_str = dt.strftime("%d.%m %H:%M")
             response += f"\n⏰ <b>Дедлайн:</b> {date_str}"
 
-            now = datetime.now(LOCAL_TZ)
-            if context.job_queue and dt > now:
-                delay = (dt - now).total_seconds()
-                context.job_queue.run_once(
-                    send_task_reminder,
-                    when=delay,
-                    chat_id=chat_id,
-                    name=f"reminder:{task_id}",
-                    data={"task_id": task_id, "text": task_text},
-                )
+            schedule_task_reminder(
+                context.job_queue,
+                task_id=task_id,
+                task_text=task_text,
+                deadline_iso=ai_result.deadline_iso,
+                chat_id=chat_id,
+            )
 
             await update.message.reply_text(
                 response,
@@ -573,16 +608,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_time = dt.strftime("%d.%m %H:%M")
 
         # ставим новое напоминание
-        now = datetime.now(LOCAL_TZ)
-        if context.job_queue and dt > now:
-            delay = (dt - now).total_seconds()
-            context.job_queue.run_once(
-                send_task_reminder,
-                when=delay,
-                chat_id=chat_id,
-                name=f"reminder:{task_id}",
-                data={"task_id": task_id, "text": task_text},
-            )
+        schedule_task_reminder(
+            context.job_queue,
+            task_id=task_id,
+            task_text=task_text,
+            deadline_iso=ai_result.deadline_iso,
+            chat_id=chat_id,
+        )
 
         await update.message.reply_text(
             f"🔄 Перенес «{task_text}» на <b>{new_time}</b>",
@@ -747,6 +779,8 @@ def main():
             time=dtime(hour=7, minute=30, tzinfo=LOCAL_TZ),
             name="daily_digest",
         )
+        # восстановим напоминания для задач с будущими дедлайнами
+        restore_reminders(app.job_queue)
 
     print("AI Smart-Tasker запущен... 🚀")
     app.run_polling()
