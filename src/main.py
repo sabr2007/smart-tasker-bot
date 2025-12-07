@@ -212,7 +212,7 @@ def detect_rename_intent(text: str):
 def find_task_by_hint(user_id: int, hint: str):
     """
     Пытается найти задачу по текстовой подсказке.
-    Сначала точное вхождение, потом похожие слова (fuzzy).
+    Сначала точное вхождение, потом осторожный fuzzy с высоким порогом.
     """
     if not hint:
         return None
@@ -220,7 +220,7 @@ def find_task_by_hint(user_id: int, hint: str):
     tasks = db.get_tasks(user_id)
     hint_lower = hint.lower().strip()
 
-    # 1) прямое вхождение подстроки
+    # 1) прямое вхождение подстроки — считаем уверенным совпадением
     candidates: list[tuple[int, str]] = []
     for t_id, t_text, _ in tasks:
         if hint_lower in t_text.lower():
@@ -239,25 +239,26 @@ def find_task_by_hint(user_id: int, hint: str):
 
     best: tuple[int, str] | None = None
     best_score = 0.0
+    best_overlap = 0
     for t_id, t_text, _ in tasks:
         task_tokens = _tokenize_meaningful(t_text)
         if not task_tokens:
             continue
 
-        # пересечение смысловых токенов
         overlap = len(set(hint_tokens) & set(task_tokens))
-        if overlap >= 2:
-            return (t_id, t_text)
+        if overlap == 0:
+            continue  # нет общих смысловых слов — пропускаем
 
-        # fuzzy по объединённой строке нормализованных слов
         task_join = " ".join(task_tokens)
         hint_join = " ".join(hint_tokens)
         score = difflib.SequenceMatcher(None, hint_join, task_join).ratio()
         if score > best_score:
             best_score = score
+            best_overlap = overlap
             best = (t_id, t_text)
 
-    if best and best_score >= 0.5:
+    # строгий порог уверенности
+    if best and best_score >= 0.75 and best_overlap >= 1:
         return best
 
     return None
