@@ -141,10 +141,20 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 
 EXTRA_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["Архив задач"],
+        ["Архив задач", "Инструкция"],
         ["Назад"],
     ],
     resize_keyboard=True,
+)
+
+
+# Краткая инструкция для пользователя
+INSTRUCTION_TEXT = (
+    "Пиши задачи обычным языком — бот сам достанет текст и дедлайн.\n\n"
+    "• Статус/планы: «что завтра по задачам», «что у меня на сегодня».\n"
+    "• Выполнение: «я сделал/сдал/сходил/позвонил/дочитал…».\n"
+    "• Перенос: «перенеси/сдвинь/измени задачу … на …».\n"
+    "• Переименование: «переименуй задачу X на Y»."
 )
 
 
@@ -587,6 +597,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "Архив задач":
         await send_archive_list(chat_id, user_id, context)
+        return
+
+    if text == "Инструкция":
+        await update.message.reply_text(
+            INSTRUCTION_TEXT,
+            reply_markup=EXTRA_KEYBOARD,
+        )
         return
 
     if text == "Назад":
