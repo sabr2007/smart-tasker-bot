@@ -1157,6 +1157,11 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await file.download_to_drive(temp_path)
 
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Секунду, расшифровываю голосовое...",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
         text = transcribe_audio(temp_path)
         if not text or len(text.strip()) < 2:
