@@ -8,6 +8,7 @@ import os
 
 from telegram import (
     Update,
+    Message,
     ReplyKeyboardMarkup,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -1176,8 +1177,14 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        update.message.text = text
-        await handle_message(update, context)
+        # Создаём новый Update с текстовым сообщением, чтобы пройти обычный pipeline
+        msg_dict = update.message.to_dict()
+        msg_dict["text"] = text
+        msg_dict.pop("voice", None)
+        new_message = Message.de_json(msg_dict, context.bot)
+        new_update = Update(update.update_id, message=new_message)
+
+        await handle_message(new_update, context)
 
     except Exception as e:
         logger.exception("Error while processing voice message from %s: %s", user_id, e)
