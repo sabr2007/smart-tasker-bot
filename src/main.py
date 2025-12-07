@@ -22,13 +22,16 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, DEFAULT_TIMEZONE
-from llm_client import parse_user_input, render_user_reply
+from llm_client import parse_user_input, render_user_reply, transcribe_audio
 from task_schema import TaskInterpretation
-import db  # твой db.py
+import db  
 
 # ===== КОНСТАНТЫ =====
 ADMIN_USER_ID = 6113692933
 LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE)
+
+# Флаг: автоматом обрабатываем голос (True) или только показываем, что услышали (False)
+ENABLE_VOICE_AUTO_HANDLE = True
 
 # ==== КОНСТАНТЫ ДЛЯ УТОЧНЕНИЯ ДЕДЛАЙНА =====
 
@@ -154,7 +157,8 @@ INSTRUCTION_TEXT = (
     "• Статус/планы: «что завтра по задачам», «что у меня на сегодня».\n"
     "• Выполнение: «я сделал/сдал/сходил/позвонил/дочитал…».\n"
     "• Перенос: «перенеси/сдвинь/измени задачу … на …».\n"
-    "• Переименование: «переименуй задачу X на Y»."
+    "• Переименование: «переименуй задачу X на Y».\n"
+    "• Это бета-версия бота, если сталкиваетесь с проблемами обратитесь к @sabrval"
 )
 
 
@@ -1128,6 +1132,62 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_tasks_list(query.message.chat_id, user_id, context)
 
 
+# ==== ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ =====
+
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обрабатывает голосовое сообщение:
+    - скачивает файл
+    - отправляет в OpenAI на транскриб
+    - подменяет текст сообщения на транскриб
+    - передаёт в ту же логику, что и обычный текст (handle_message).
+    """
+    if not update.message or not update.message.voice:
+        return
+
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    voice = update.message.voice
+
+    try:
+        file = await context.bot.get_file(voice.file_id)
+        temp_path = f"/tmp/voice_{user_id}_{voice.file_unique_id}.ogg"
+        await file.download_to_drive(temp_path)
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        text = transcribe_audio(temp_path)
+        if not text or len(text.strip()) < 2:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Не смог нормально разобрать голосовое. Попробуй ещё раз или напиши текстом 🙂",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        logger.info("Voice transcript from %s: %r", user_id, text)
+
+        if not ENABLE_VOICE_AUTO_HANDLE:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Я услышал из голосового:\n\n«{text}»\n\nМожешь отправить это текстом или скорректировать 🙂",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+
+        update.message.text = text
+        await handle_message(update, context)
+
+    except Exception as e:
+        logger.exception("Error while processing voice message from %s: %s", user_id, e)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Что-то пошло не так с голосовым. Попробуй ещё раз или напиши текстом 🙂",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+
 # ==== АДМИН-КОМАНДЫ =====
 
 async def cmd_dumpdb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1182,6 +1242,9 @@ def main():
 
     # текстовые сообщения
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # голосовые сообщения
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
 
     # inline-кнопки
     app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))

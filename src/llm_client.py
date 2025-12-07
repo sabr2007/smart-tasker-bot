@@ -354,3 +354,22 @@ def render_user_reply(event: Dict[str, Any]) -> str:
 
     text = response.choices[0].message.content.strip()
     return text
+
+
+def transcribe_audio(file_path: str) -> Optional[str]:
+    """
+    Расшифровывает аудиофайл (голосовое из Telegram) в текст с помощью OpenAI.
+    Возвращает строку с текстом или None в случае ошибки.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=f,
+            )
+        text = getattr(result, "text", None)
+        if text:
+            return text.strip()
+        return None
+    except Exception:
+        return None
