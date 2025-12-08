@@ -597,6 +597,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
+    # Логируем исходный текст пользователя (после возможной подстановки из голосового)
+    logger.info("Incoming text from user %s (chat %s): %r", user_id, chat_id, text)
+
     # --- 0. Обработка "кнопок" (нижняя клавиатура) ---
     if text == "Показать задачи":
         await send_tasks_list(chat_id, user_id, context)
@@ -802,11 +805,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ai_result: TaskInterpretation = parse_user_input(text, tasks_snapshot=tasks_snapshot)
     except Exception as e:
+        logger.exception("parse_user_input failed for user %s: %s", user_id, e)
         await update.message.reply_text(
             f"🤯 Мозг сломался: {e}",
             reply_markup=MAIN_KEYBOARD,
         )
         return
+
+    # Логируем ответ парсера для дальнейшего дебага
+    logger.info("Parsed intent for user %s: %s", user_id, ai_result.model_dump())
 
     # Предохранитель от массовых действий типа "очистить список задач"
     MASS_CLEAR_HINTS = [
@@ -1194,7 +1201,9 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        logger.info("Voice transcript from %s: %r", user_id, text)
+        logger.info(
+            "Whisper transcript for user %s (chat %s): %r", user_id, chat_id, text
+        )
 
         if not ENABLE_VOICE_AUTO_HANDLE:
             await context.bot.send_message(
