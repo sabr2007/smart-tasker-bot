@@ -125,6 +125,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+# Урезаем болтливость httpx/httpcore (телеграм и OpenAI спамят в INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def safe_render_user_reply(event: dict) -> str:
