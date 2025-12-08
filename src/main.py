@@ -884,6 +884,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks_snapshot = db.get_tasks(user_id)
 
     # --- Попытка батч-парсинга нескольких create ---#
+    ai_result: Optional[TaskInterpretation] = None
     multi_results: list[TaskInterpretation] = []
     try:
         multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot)
@@ -898,10 +899,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [m.model_dump() for m in multi_results],
         )
 
-    create_items = [m for m in multi_results if m.action == "create"]
-    unsupported_items = len(multi_results) - len(create_items)
-    if unsupported_items > 0:
-        logger.info("Multi-parse skipped %d unsupported actions", unsupported_items)
+    # parse_user_input_multi уже фильтрует только action=create
+    create_items = multi_results
 
     # Батч включаем только если точно более одной новой задачи.
     if len(create_items) >= 2:
@@ -934,15 +933,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
         return
 
-    try:
-        ai_result: TaskInterpretation = parse_user_input(text, tasks_snapshot=tasks_snapshot)
-    except Exception as e:
-        logger.exception("parse_user_input failed for user %s: %s", user_id, e)
-        await update.message.reply_text(
-            f"🤯 Мозг сломался: {e}",
-            reply_markup=MAIN_KEYBOARD,
-        )
-        return
+    if len(create_items) == 1:
+        ai_result = create_items[0]
+
+    if ai_result is None:
+        try:
+            ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot)
+        except Exception as e:
+            logger.exception("parse_user_input failed for user %s: %s", user_id, e)
+            await update.message.reply_text(
+                f"🤯 Мозг сломался: {e}",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
 
     # Логируем ответ парсера для дальнейшего дебага
     logger.info("Parsed intent for user %s: %s", user_id, ai_result.model_dump())
