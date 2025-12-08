@@ -1,5 +1,6 @@
 # src/main.py
 import logging
+from typing import Optional
 from datetime import datetime, time as dtime, timedelta, date
 from zoneinfo import ZoneInfo
 import difflib
@@ -23,7 +24,12 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, DEFAULT_TIMEZONE
-from llm_client import parse_user_input, render_user_reply, transcribe_audio
+from llm_client import (
+    parse_user_input,
+    parse_user_input_multi,
+    render_user_reply,
+    transcribe_audio,
+)
 from task_schema import TaskInterpretation
 import db  
 
@@ -360,6 +366,17 @@ def is_deadline_like(text: str) -> bool:
     )
 
     return has_time_word or has_time_pattern or has_date_pattern or has_hour_with_part_of_day
+
+
+def _format_deadline_human_local(deadline_iso: Optional[str]) -> Optional[str]:
+    """Локальный формат дедлайна для коротких ответов."""
+    if not deadline_iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(deadline_iso).astimezone(LOCAL_TZ)
+        return dt.strftime("%d.%m %H:%M")
+    except Exception:
+        return None
 
 
 def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
@@ -865,6 +882,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
     tasks_snapshot = db.get_tasks(user_id)
+
+    # --- Попытка батч-парсинга нескольких create ---#
+    multi_results: list[TaskInterpretation] = []
+    try:
+        multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot)
+    except Exception as e:
+        logger.exception("parse_user_input_multi failed for user %s: %s", user_id, e)
+
+    if multi_results:
+        logger.info(
+            "Multi-parsed %d items for user %s: %s",
+            len(multi_results),
+            user_id,
+            [m.model_dump() for m in multi_results],
+        )
+
+    create_items = [m for m in multi_results if m.action == "create"]
+    unsupported_items = len(multi_results) - len(create_items)
+    if unsupported_items > 0:
+        logger.info("Multi-parse skipped %d unsupported actions", unsupported_items)
+
+    # Батч включаем только если точно более одной новой задачи.
+    if len(create_items) >= 2:
+        lines: list[str] = []
+        for item in create_items:
+            task_text = item.title or item.raw_input
+            task_id = db.add_task(
+                user_id,
+                task_text,
+                item.deadline_iso,
+            )
+
+            # ставим напоминание только если дедлайн есть и в будущем
+            if item.deadline_iso:
+                schedule_task_reminder(
+                    context.job_queue,
+                    task_id=task_id,
+                    task_text=task_text,
+                    deadline_iso=item.deadline_iso,
+                    chat_id=chat_id,
+                )
+
+            human_deadline = _format_deadline_human_local(item.deadline_iso)
+            if human_deadline:
+                lines.append(f"• {task_text} (до {human_deadline})")
+            else:
+                lines.append(f"• {task_text}")
+
+        reply_text = f"Добавил {len(create_items)} задач:\n" + "\n".join(lines)
+        await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
+        return
 
     try:
         ai_result: TaskInterpretation = parse_user_input(text, tasks_snapshot=tasks_snapshot)

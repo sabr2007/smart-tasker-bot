@@ -1,6 +1,7 @@
 # src/llm_client.py
 
 import json
+import logging
 from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -11,6 +12,7 @@ from task_schema import TaskInterpretation
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE)
+logger = logging.getLogger(__name__)
 
 
 def _format_tasks_for_prompt(
@@ -194,6 +196,45 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
 """
 
 
+def build_system_prompt_multi(now_str: str, tasks_block: str, max_items: int) -> str:
+    return f"""
+Ты — узкоспециализированный парсер команд для умного таск-менеджера в Telegram.
+
+Твоя задача: взять ФРАЗУ ПОЛЬЗОВАТЕЛЯ и вернуть СТРОГО ОДИН JSON-ОБЪЕКТ верхнего уровня,
+который содержит массив элементов (задач).
+
+Формат ответа:
+{{
+  "items": [
+    {{
+      "action": "create",
+      "title": "строка или null",
+      "deadline_iso": "ISO 8601 или null",
+      "target_task_hint": null,
+      "note": "строка или null",
+      "language": "ru | en | другое или null",
+      "raw_input": "оригинальный фрагмент пользователя"
+    }}
+  ]
+}}
+
+Важно:
+- Максимум {max_items} элементов в массиве. Бери только самые явные задачи.
+- Каждый элемент описывает ОДНУ независимую задачу. Не придумывай лишние.
+- Не используй ссылки вроде "ей", "ему", "этой задаче". Если фраза без самостоятельной задачи — пропусти.
+- На этом этапе поддерживаем только action = "create". Остальные действия (reschedule/complete/delete/show_*) НЕ добавляй в массив.
+- Все относительные даты интерпретируй относительно "{now_str}" в таймзоне "{DEFAULT_TIMEZONE}".
+
+Как делить исходный текст:
+- Мысленно раздели сообщение на смысловые фрагменты: по предложениям, нумерации ("1.", "2.", "во-первых"), словам "дальше", "потом", переносам строк.
+- Для каждого фрагмента реши, есть ли явная новая задача. Если нет — не добавляй элемент.
+- Не более {max_items} задач из одного сообщения.
+
+Ниже — актуальные задачи пользователя (для контекста, новые задачи могут быть любыми):
+{tasks_block}
+"""
+
+
 def _normalize_deadline_iso(raw_value: Any) -> str | None:
     """
     Нормализует deadline_iso к локальной таймзоне:
@@ -230,6 +271,74 @@ def _normalize_deadline_iso(raw_value: Any) -> str | None:
         dt = dt.astimezone(LOCAL_TZ)
 
     return dt.isoformat()
+
+
+def parse_user_input_multi(
+    user_text: str,
+    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
+    max_items: int = 5,
+) -> List[TaskInterpretation]:
+    """
+    Парсит сообщение в массив задач. На первом этапе поддерживаем только action=create.
+    """
+    now = datetime.now(LOCAL_TZ)
+    now_str = now.isoformat()
+
+    tasks_block = _format_tasks_for_prompt(tasks_snapshot)
+    system_prompt = build_system_prompt_multi(now_str, tasks_block, max_items)
+
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ],
+    )
+
+    raw = response.choices[0].message.content
+    try:
+        data: Dict[str, Any] = json.loads(raw)
+    except Exception:
+        logger.exception("Failed to decode multi-parse JSON: %r", raw)
+        return []
+
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+
+    results: list[TaskInterpretation] = []
+    unsupported = 0
+
+    for item in items[:max_items]:
+        if not isinstance(item, dict):
+            continue
+
+        action = item.get("action")
+        if action != "create":
+            unsupported += 1
+            continue
+
+        ti_dict = dict(item)
+        ti_dict["action"] = "create"
+        ti_dict["deadline_iso"] = _normalize_deadline_iso(item.get("deadline_iso"))
+        ti_dict["target_task_hint"] = None
+        ti_dict["raw_input"] = item.get("raw_input") or user_text
+
+        try:
+            ti = TaskInterpretation.model_validate(ti_dict)
+            if not ti.title and not ti.raw_input:
+                continue
+            results.append(ti)
+        except Exception:
+            logger.exception("Failed to validate multi item: %r", ti_dict)
+            continue
+
+    if unsupported:
+        logger.info("Multi-parse skipped %d unsupported actions", unsupported)
+
+    return results
 
 
 def parse_user_input(
