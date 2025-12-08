@@ -120,6 +120,24 @@ STOP_WORDS = {
     "для",
 }
 
+GREETING_WORDS = {
+    "привет",
+    "приветик",
+    "хай",
+    "hi",
+    "hello",
+    "салам",
+    "саламалейкум",
+    "салют",
+    "здорова",
+    "здравствуйте",
+    "добрый",
+    "добрыйдень",
+    "доброе",
+    "утро",
+    "вечер",
+}
+
 # ЛОГИ
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -191,6 +209,22 @@ def _tokenize_meaningful(text: str) -> list[str]:
         if norm:
             out.append(norm)
     return out
+
+
+def is_greeting_only(text: str) -> bool:
+    """
+    Определяет, является ли сообщение коротким приветствием без содержательной части.
+    Простая эвристика: все слова должны быть из списка приветствий.
+    """
+    tokens = re.findall(r"\w+", text.lower())
+    if not tokens:
+        return False
+
+    # если в тексте есть явные маркеры времени/действий — не считаем приветствием
+    if any(t in TIME_HINT_WORDS for t in tokens) or any(t in TASK_VERB_HINTS for t in tokens):
+        return False
+
+    return all(tok in GREETING_WORDS for tok in tokens)
 
 
 def detect_rename_intent(text: str):
@@ -417,19 +451,37 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
         )
         return
 
-    lines: list[str] = []
-    for i, (tid, txt, due) in enumerate(tasks, 1):
+    with_due: list[str] = []
+    without_due: list[str] = []
+
+    for tid, txt, due in tasks:
         if due:
             try:
                 dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
                 d_str = dt.strftime("%d.%m %H:%M")
-                lines.append(f"{i}. {txt} (до {d_str})")
+                with_due.append(f"{len(with_due) + 1}. {txt} (до {d_str})")
             except Exception:
-                lines.append(f"{i}. {txt}")
+                with_due.append(f"{len(with_due) + 1}. {txt}")
         else:
-            lines.append(f"{i}. {txt}")
+            without_due.append(f"{len(without_due) + 1}. {txt}")
 
-    text = "📋 <b>Твои задачи:</b>\n\n" + "\n".join(lines)
+    parts: list[str] = ["📋 <b>Твои задачи:</b>"]
+
+    if with_due:
+        parts.append("")
+        parts.append("Задачи с дедлайном:")
+        parts.extend(with_due)
+
+    if with_due and without_due:
+        parts.append("")
+        parts.append("---")
+
+    if without_due:
+        parts.append("")
+        parts.append("Задачи без дедлайна:")
+        parts.extend(without_due)
+
+    text = "\n".join(parts)
 
     # 1) сообщение со списком + inline-кнопка
     await context.bot.send_message(
@@ -629,6 +681,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "Назад":
         await update.message.reply_text(
             "Возвращаюсь в главное меню.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+
+    # --- Приветствие / онбординг ---
+    if is_greeting_only(text):
+        await update.message.reply_text(
+            "Привет! Я умный таск-менеджер: превращаю свободные фразы в задачи с дедлайнами. "
+            "Нажми «Инструкция» или просто напиши задачу — я добавлю её в список.",
             reply_markup=MAIN_KEYBOARD,
         )
         return

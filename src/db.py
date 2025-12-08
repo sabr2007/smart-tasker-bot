@@ -51,6 +51,26 @@ def init_db():
             """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER,
+                user_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                due_at TEXT,
+                status TEXT,
+                created_at TEXT,
+                completed_at TEXT,
+                deleted_at TEXT,
+                category TEXT,
+                source TEXT,
+                reason TEXT,
+                archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # --- Миграции (на случай старой базы) ---
         cursor.execute("PRAGMA table_info(tasks)")
         columns = [row[1] for row in cursor.fetchall()]
@@ -112,6 +132,79 @@ def get_task(user_id: int, task_id: int) -> Optional[Tuple[int, str, Optional[st
         return cursor.fetchone()
 
 
+def _fetch_task_row(user_id: int, task_id: int):
+    """Возвращает полную строку задачи или None."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, text, created_at, due_at, status, completed_at, category
+            FROM tasks
+            WHERE id = ? AND user_id = ?
+            """,
+            (task_id, user_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        (
+            tid,
+            uid,
+            text,
+            created_at,
+            due_at,
+            status,
+            completed_at,
+            category,
+        ) = row
+        return {
+            "task_id": tid,
+            "user_id": uid,
+            "text": text,
+            "created_at": created_at,
+            "due_at": due_at,
+            "status": status,
+            "completed_at": completed_at,
+            "category": category,
+            "source": None,
+        }
+
+
+def _archive_task_snapshot(task_row: Optional[dict], reason: str, deleted_at: Optional[str] = None):
+    """
+    Сохраняет копию задачи в аналитический архив.
+    Не влияет на пользовательский интерфейс.
+    """
+    if not task_row:
+        return
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO tasks_history (
+                task_id, user_id, text, due_at, status, created_at,
+                completed_at, deleted_at, category, source, reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_row.get("task_id"),
+                task_row.get("user_id"),
+                task_row.get("text"),
+                task_row.get("due_at"),
+                task_row.get("status"),
+                task_row.get("created_at"),
+                task_row.get("completed_at"),
+                deleted_at or task_row.get("deleted_at"),
+                task_row.get("category"),
+                task_row.get("source"),
+                reason,
+            ),
+        )
+        conn.commit()
+
+
 def update_task_due(user_id: int, task_id: int, due_at_iso: Optional[str]):
     """Обновляет дедлайн задачи."""
     with get_connection() as conn:
@@ -136,6 +229,12 @@ def update_task_text(user_id: int, task_id: int, new_text: str):
 
 def delete_task(user_id: int, task_id: int):
     """Удаляет задачу (физически)."""
+    task_row = _fetch_task_row(user_id, task_id)
+    deleted_at_iso = datetime.now().isoformat()
+    if task_row:
+        task_row["deleted_at"] = deleted_at_iso
+        _archive_task_snapshot(task_row, reason="deleted", deleted_at=deleted_at_iso)
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -148,6 +247,7 @@ def delete_task(user_id: int, task_id: int):
 def set_task_done(user_id: int, task_id: int):
     """Помечает задачу выполненной (status='done')."""
     now_iso = datetime.now().isoformat()
+    task_row = _fetch_task_row(user_id, task_id)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -159,6 +259,11 @@ def set_task_done(user_id: int, task_id: int):
             (now_iso, task_id, user_id),
         )
         conn.commit()
+
+    if task_row:
+        task_row["status"] = "done"
+        task_row["completed_at"] = now_iso
+        _archive_task_snapshot(task_row, reason="completed")
 
 
 def get_archived_tasks(user_id: int, limit: int = 10) -> List[Tuple[int, str, Optional[str], Optional[str]]]:
@@ -180,6 +285,44 @@ def get_archived_tasks(user_id: int, limit: int = 10) -> List[Tuple[int, str, Op
 
 def clear_archived_tasks(user_id: int) -> None:
     """Очищает архив выполненных задач пользователя."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, text, created_at, due_at, status, completed_at, category
+            FROM tasks
+            WHERE user_id = ? AND status = 'done'
+            """,
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+
+    if rows:
+        deleted_at_iso = datetime.now().isoformat()
+        for row in rows:
+            (
+                tid,
+                uid,
+                text,
+                created_at,
+                due_at,
+                status,
+                completed_at,
+                category,
+            ) = row
+            snapshot = {
+                "task_id": tid,
+                "user_id": uid,
+                "text": text,
+                "created_at": created_at,
+                "due_at": due_at,
+                "status": status,
+                "completed_at": completed_at,
+                "category": category,
+                "source": None,
+            }
+            _archive_task_snapshot(snapshot, reason="cleared_archive", deleted_at=deleted_at_iso)
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
