@@ -17,3 +17,7 @@ tasks.db
 # IDE
 .vscode/
 .idea/
+
+#Tests
+test_runs/
+*.txt

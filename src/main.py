@@ -883,7 +883,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tasks_snapshot = db.get_tasks(user_id)
 
-    # --- Попытка батч-парсинга нескольких create ---#
+    # --- Попытка батч-парсинга нескольких действий (create/complete) ---#
     ai_result: Optional[TaskInterpretation] = None
     multi_results: list[TaskInterpretation] = []
     try:
@@ -899,42 +899,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [m.model_dump() for m in multi_results],
         )
 
-    # parse_user_input_multi уже фильтрует только action=create
-    create_items = multi_results
+    # Батч включаем только если >=2 элементов и все action в {create, complete}
+    supported_actions = {"create", "complete"}
+    if len(multi_results) >= 2 and all(m.action in supported_actions for m in multi_results):
+        created_lines: list[str] = []
+        completed_lines: list[str] = []
+        not_found_lines: list[str] = []
 
-    # Батч включаем только если точно более одной новой задачи.
-    if len(create_items) >= 2:
-        lines: list[str] = []
-        for item in create_items:
-            task_text = item.title or item.raw_input
-            task_id = db.add_task(
-                user_id,
-                task_text,
-                item.deadline_iso,
-            )
-
-            # ставим напоминание только если дедлайн есть и в будущем
-            if item.deadline_iso:
-                schedule_task_reminder(
-                    context.job_queue,
-                    task_id=task_id,
-                    task_text=task_text,
-                    deadline_iso=item.deadline_iso,
-                    chat_id=chat_id,
+        for item in multi_results:
+            if item.action == "create":
+                task_text = item.title or item.raw_input
+                task_id = db.add_task(
+                    user_id,
+                    task_text,
+                    item.deadline_iso,
                 )
 
-            human_deadline = _format_deadline_human_local(item.deadline_iso)
-            if human_deadline:
-                lines.append(f"• {task_text} (до {human_deadline})")
-            else:
-                lines.append(f"• {task_text}")
+                # ставим напоминание только если дедлайн есть и в будущем
+                if item.deadline_iso:
+                    schedule_task_reminder(
+                        context.job_queue,
+                        task_id=task_id,
+                        task_text=task_text,
+                        deadline_iso=item.deadline_iso,
+                        chat_id=chat_id,
+                    )
 
-        reply_text = f"Добавил {len(create_items)} задач:\n" + "\n".join(lines)
+                human_deadline = _format_deadline_human_local(item.deadline_iso)
+                if human_deadline:
+                    created_lines.append(f"• создано: {task_text} (до {human_deadline})")
+                else:
+                    created_lines.append(f"• создано: {task_text}")
+
+            elif item.action == "complete":
+                target = find_task_by_hint(user_id, item.target_task_hint or "")
+                if not target:
+                    not_found_lines.append(
+                        f"• не нашёл задачу для: {item.target_task_hint or 'этого фрагмента'}"
+                    )
+                    continue
+
+                task_id, task_text = target
+                cancel_task_reminder(task_id, context)
+                db.set_task_done(user_id, task_id)
+                completed_lines.append(f"• выполнена: {task_text}")
+
+        parts: list[str] = []
+        if created_lines:
+            parts.append("Добавил задачи:")
+            parts.extend(created_lines)
+        if completed_lines:
+            if parts:
+                parts.append("")
+            parts.append("Отметил выполненными:")
+            parts.extend(completed_lines)
+        if not_found_lines:
+            if parts:
+                parts.append("")
+            parts.append("Не смог сопоставить:")
+            parts.extend(not_found_lines)
+
+        reply_text = "\n".join(parts) if parts else "Ничего не сделал."
         await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
         return
 
-    if len(create_items) == 1:
-        ai_result = create_items[0]
+    if len(multi_results) == 1 and multi_results[0].action in supported_actions:
+        ai_result = multi_results[0]
 
     if ai_result is None:
         try:
@@ -1172,9 +1202,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # ПОКАЗАТЬ ЗАДАЧИ (через текст, а не кнопку)
-    elif ai_result.action in ["show_active", "show_today"]:
-        # фильтр по "today" сделаем позже, пока просто все активные
-        await send_tasks_list(chat_id, user_id, context)
+    elif ai_result.action in ["show_active", "show_today", "show_tomorrow", "show_date"]:
+        target_date = None
+        if ai_result.action == "show_today":
+            target_date = datetime.now(LOCAL_TZ).date()
+        elif ai_result.action == "show_tomorrow":
+            target_date = (datetime.now(LOCAL_TZ) + timedelta(days=1)).date()
+        elif ai_result.action == "show_date" and ai_result.deadline_iso:
+            try:
+                target_date = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ).date()
+            except Exception:
+                target_date = None
+
+        if target_date:
+            tasks_for_day = filter_tasks_by_date(user_id, target_date)
+            if tasks_for_day:
+                lines = []
+                for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
+                    try:
+                        dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                        d_str = dt.strftime("%d.%m %H:%M")
+                        lines.append(f"{i}. {txt} (до {d_str})")
+                    except Exception:
+                        lines.append(f"{i}. {txt}")
+                await update.message.reply_text(
+                    "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),
+                    reply_markup=MAIN_KEYBOARD,
+                )
+            else:
+                await update.message.reply_text(
+                    "На этот день задач нет 🙂",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+        else:
+            await send_tasks_list(chat_id, user_id, context)
 
         tasks_now = db.get_tasks(user_id)
         event = {
@@ -1315,6 +1376,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = update.effective_chat.id
     voice = update.message.voice
 
+    temp_path = None
     try:
         file = await context.bot.get_file(voice.file_id)
         temp_path = f"/tmp/voice_{user_id}_{voice.file_unique_id}.ogg"
@@ -1364,6 +1426,12 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             text="Что-то пошло не так с голосовым. Попробуй ещё раз или напиши текстом 🙂",
             reply_markup=MAIN_KEYBOARD,
         )
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 # ==== АДМИН-КОМАНДЫ =====
