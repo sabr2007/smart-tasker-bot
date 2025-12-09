@@ -1204,6 +1204,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ПОКАЗАТЬ ЗАДАЧИ (через текст, а не кнопку)
     elif ai_result.action in ["show_active", "show_today", "show_tomorrow", "show_date"]:
         target_date = None
+        weekend_mode = False
         if ai_result.action == "show_today":
             target_date = datetime.now(LOCAL_TZ).date()
         elif ai_result.action == "show_tomorrow":
@@ -1213,27 +1214,62 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_date = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ).date()
             except Exception:
                 target_date = None
+        if ai_result.action == "show_date" and getattr(ai_result, "note", None) == "weekend":
+            weekend_mode = True
 
         if target_date:
-            tasks_for_day = filter_tasks_by_date(user_id, target_date)
-            if tasks_for_day:
-                lines = []
-                for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
-                    try:
-                        dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
-                        d_str = dt.strftime("%d.%m %H:%M")
-                        lines.append(f"{i}. {txt} (до {d_str})")
-                    except Exception:
-                        lines.append(f"{i}. {txt}")
-                await update.message.reply_text(
-                    "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),
-                    reply_markup=MAIN_KEYBOARD,
-                )
+            if weekend_mode:
+                # показываем ближайшие субботу и воскресенье
+                today = datetime.now(LOCAL_TZ).date()
+                weekday = today.weekday()  # 0=Mon
+                days_to_sat = (5 - weekday) % 7
+                days_to_sun = (6 - weekday) % 7
+                sat_date = today + timedelta(days=days_to_sat)
+                sun_date = today + timedelta(days=days_to_sun)
+
+                parts = []
+                for label, d in [("Суббота", sat_date), ("Воскресенье", sun_date)]:
+                    tasks_for_day = filter_tasks_by_date(user_id, d)
+                    if tasks_for_day:
+                        lines = []
+                        for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
+                            try:
+                                dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                                d_str = dt.strftime("%d.%m %H:%M")
+                                lines.append(f"{i}. {txt} (до {d_str})")
+                            except Exception:
+                                lines.append(f"{i}. {txt}")
+                        parts.append(f"📌 {label}:\n" + "\n".join(lines))
+                if parts:
+                    await update.message.reply_text(
+                        "\n\n".join(parts),
+                        reply_markup=MAIN_KEYBOARD,
+                    )
+                else:
+                    await update.message.reply_text(
+                        "На выходных задач нет 🙂",
+                        reply_markup=MAIN_KEYBOARD,
+                    )
             else:
-                await update.message.reply_text(
-                    "На этот день задач нет 🙂",
-                    reply_markup=MAIN_KEYBOARD,
-                )
+                tasks_for_day = filter_tasks_by_date(user_id, target_date)
+                if tasks_for_day:
+                    lines = []
+                    for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
+                        try:
+                            dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                            d_str = dt.strftime("%d.%m %H:%M")
+                            lines.append(f"{i}. {txt} (до {d_str})")
+                        except Exception:
+                            lines.append(f"{i}. {txt}")
+                    await update.message.reply_text(
+                        "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),
+                        reply_markup=MAIN_KEYBOARD,
+                    )
+                else:
+                    await update.message.reply_text(
+                        "На этот день задач нет 🙂",
+                        reply_markup=MAIN_KEYBOARD,
+                    )
         else:
             await send_tasks_list(chat_id, user_id, context)
 

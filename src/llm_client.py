@@ -387,7 +387,16 @@ def _sanitize_target_hint(user_text: str, hint: Optional[str]) -> Optional[str]:
     Это защита от галлюцинаций (подстановка текста чужой задачи).
     """
     if not hint:
-        return None
+        # Попробуем вытянуть содержательную часть после "про/с" как подсказку
+        m = re.search(r"(?:про|по|с)\s+(.+)", user_text, flags=re.IGNORECASE)
+        if m:
+            extracted = m.group(1).strip()
+            if extracted:
+                hint = extracted
+            else:
+                return None
+        else:
+            return None
 
     def _stem(token: str) -> str:
         token = token.lower()
@@ -538,17 +547,24 @@ def parse_user_input(
             "reschedule",
             "shift",
             "delay",
+            "добавь дедлайн",
+            "поставь дедлайн",
+            "добавь срок",
+            "поставь срок",
+            "назначь срок",
+            "назначь дедлайн",
         ]
         if not any(m in lower for m in transfer_markers):
             data["action"] = "create"
             data["title"] = data.get("title") or data.get("raw_input")
             data["target_task_hint"] = None
             # deadline оставляем, если был
-    # Если целиком про выходные — лучше unknown, чтобы не угадывать
-    if data.get("action") in {"show_date", "show_today", "show_tomorrow"}:
+    # Если про выходные — показываем ближайшие субботу и воскресенье как два дня (через note)
+    if data.get("action") in {"show_active", "show_today", "show_tomorrow", "show_date"}:
         lower = user_text.lower()
         if "выходных" in lower or "выходные" in lower or "weekend" in lower:
-            data["action"] = "unknown"
+            data["action"] = "show_date"
+            data["note"] = "weekend"
             data["deadline_iso"] = None
 
     return TaskInterpretation.model_validate(data)
