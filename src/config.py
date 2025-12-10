@@ -11,3 +11,4 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY не найден в .env")
+

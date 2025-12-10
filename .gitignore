@@ -21,3 +21,6 @@ tasks.db
 #Tests
 test_runs/
 *.txt
+
+# LLM scenarios
+src/llm_manual_scenarios.py

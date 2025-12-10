@@ -3,8 +3,9 @@
 import json
 import logging
 import re
+import difflib
 from typing import Any, Dict, List, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from openai import OpenAI
 
@@ -45,6 +46,11 @@ WEEKDAY_EN = {
     "sunday": 6,
 }
 logger = logging.getLogger(__name__)
+
+# Максимум элементов в multi-ответе, которые готовы обработать в одном запросе
+MAX_ITEMS_PER_REQUEST = 10
+# Сколько delete подряд считаем потенциально опасными без подтверждения
+MAX_DELETE_WITHOUT_CONFIRM = 2
 
 
 def _format_tasks_for_prompt(
@@ -110,6 +116,9 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
 - Не вставляй в target_task_hint текст задачи из списка, если в пользовательской
   фразе нет лексического пересечения с этим текстом. target_task_hint должен
   основываться на словах пользователя.
+- Слова "удали", "убери", "сотри", "delete", "remove" → всегда action = "delete".
+- Слова "перенеси", "сдвинь", "move", "shift", "reschedule", "change deadline",
+  "поставь дедлайн/срок", "добавь дедлайн/срок", "назначь дедлайн/срок" → всегда action = "reschedule".
 
 - Если пользователь создаёт НОВУЮ задачу (action = "create"), то "title"
   — это НОВАЯ формулировка, не обязанная совпадать ни с одной из задач в списке.
@@ -117,7 +126,7 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
 Формат ответа — всегда ровно такой JSON:
 
 {{
-  "action": "create | reschedule | complete | delete | show_active | show_today | show_tomorrow | show_date | unknown",
+  "action": "create | reschedule | complete | delete | rename | show_active | show_today | show_tomorrow | show_date | unknown",
   "title": "строка или null",
   "deadline_iso": "строка формата ISO 8601 или null",
   "target_task_hint": "строка или null",
@@ -130,7 +139,7 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
 
 1. НОВАЯ задача:
    - action = "create"
-   - title = сжатая формулировка задачи в повелительном наклонении.
+   - title обязателен; если не получается выделить внятный заголовок — лучше unknown.
    - deadline_iso:
        * если есть явная дата/время → нормальный ISO с таймзоной;
        * если даты нет вообще → deadline_iso = null.
@@ -138,8 +147,9 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
    - Важно отличать план от завершения:
      * Если фраза звучит как план/намерение/необходимость ("надо", "нужно", "хочу",
        "планирую", "собираюсь", "надо сдать отчёт", "хочу выучить 10 слов") → это create.
-      * Английский императив ("finish math assignment", "book appointment", "send update", "schedule call") → это create, если нет явного прошедшего времени.
+     * Английский императив ("finish math assignment", "book appointment", "send update", "schedule call") → это create, если нет явного прошедшего времени.
      * Если нет явного признака, что действие уже сделано, выбирай create, а не complete.
+   - Не включай в title фразы про сроки ("к понедельнику", "до пятницы"); эти куски должны отразиться в deadline_iso.
 
 2. ПЕРЕНОС задачи:
    - action = "reschedule"
@@ -156,6 +166,8 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
    - "добавь дедлайн к задаче про тимбилдинг на пятницу"
    - "поставь срок на встречу с ректором в понедельник в 11"
    - "назначь дедлайн на проект завтра в 10"
+   - "move team meeting to next monday at 11am"
+   - "поставь/добавь/назначь дедлайн/срок" → это reschedule.
 
    Если фраза содержит слова "перенеси", "сдвинь", "измени задачу" +
    указание новой даты/времени/срока ("завтра", "через два дня",
@@ -163,10 +175,7 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
    а не создание новой задачи.
    Если в тексте просто "сделать/напиши/добавить ..." без слов переноса —
    это CREATE, даже если текст похож на существующую задачу.
-   - Если фраза содержит глаголы переименования ("переименовать", "переименуй",
-     "измени название", "исправь название") — это НЕ перенос и НЕ завершение.
-     В таких случаях ставь action = "unknown", чтобы приложение само обработало
-     переименование.
+   - Переименование — отдельное действие (см. пункт про rename).
 
 3. ЗАВЕРШЕНИЕ задачи:
    - action = "complete"
@@ -187,21 +196,35 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
    - остальные поля = null, raw_input = оригинальная фраза (deadline_iso только для show_date).
 
 5. УДАЛИТЬ задачу:
-   - action = "delete"
+   - action = "delete" если есть "удали", "убери", "сотри", "delete", "remove".
    - target_task_hint = по какой задаче (желательно совпадает с одной из задач из списка).
    - deadline_iso = null.
 
-6. Не про задачи:
+6. ПЕРЕИМЕНОВАНИЕ задачи:
+   - action = "rename"
+   - Когда пользователь явно просит изменить название задачи:
+     "переименуй задачу про курсовую на отчёт по истории",
+     "измени название задачи с созвона с Тимуром на созвон с тимлидом",
+     "rename task about math to calculus homework".
+   - title = новое название задачи (как она должна называться после переименования).
+   - target_task_hint = старая формулировка или фраза, по которой можно найти существующую задачу
+     (как пользователь её описал).
+   - deadline_iso = null.
+   - Не создаём новую задачу, меняем только текст существующей.
+
+7. Не про задачи:
    - action = "unknown"
    - остальные поля = null (кроме raw_input).
    - Ты НЕ придумываешь задачи, если человек просто задаёт общий вопрос.
 
-7. Интерпретация дат и времени для поля deadline_iso:
+8. Интерпретация дат и времени для поля deadline_iso:
    - если пользователь указал ТОЛЬКО время ("в 17:00", "в 6", "в 6 утра")
      → используй СЕГОДНЯШНЮЮ дату относительно "{now_str}".
    - если указан только день/дата без времени → используй время 23:59 по "{DEFAULT_TIMEZONE}".
    - если указан день/дата + указание времени суток без цифр ("утром", "днём", "вечером", "ночью")
      → ставь время по умолчанию: утром=09:00, днём=15:00, вечером=21:00, ночью=23:00.
+   - если указано явное время (09:00, 19:00, 11am) и одновременно есть слова "утром/днём/вечером/ночью" — оставляй указанное время как есть; части суток не меняют часы (кроме правила 7 вечера → 19:00).
+   - если указан день недели + конкретное время ("к понедельнику 12:00", "Friday 19:00") — используй ровно этот день недели и это время без сдвигов.
    - если указана и дата, и время → используй их как есть, в таймзоне "{DEFAULT_TIMEZONE}".
    - если даты нельзя понять → deadline_iso = null.
    - "до/к <дню недели>" означает конец этого дня (23:59) без смещения на предыдущий день.
@@ -210,11 +233,11 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
      ты всё равно обязан заполнить поле deadline_iso по этим правилам,
      даже если action при этом будет "unknown".
 
-8. ОБЯЗАТЕЛЬНО:
+9. ОБЯЗАТЕЛЬНО:
    - Всегда возвращай корректный JSON-объект без текста до/после.
    - Не используй комментарии, лишние поля, NaN, Infinity.
 
-9. Отдельно про массовые действия и "очистить всё":
+10. Отдельно про массовые действия и "очистить всё":
    - Если фраза звучит так, будто пользователь говорит про ВСЕ задачи сразу,
      а не про одну конкретную, НЕ нужно выбирать delete/complete для одной задачи.
    - Примеры таких фраз:
@@ -234,7 +257,7 @@ def build_system_prompt(now_str: str, tasks_block: str) -> str:
        target_task_hint = null
        deadline_iso = null
 
-10. Отдельно про "надо/нужно/хочу/планирую":
+11. Отдельно про "надо/нужно/хочу/планирую":
    - Фразы вида "надо сдать отчёт", "нужно помыть балкон",
      "хочу подготовиться к мидтерму", "планирую выучить 20 слов"
      трактуй как action = "create" (новая задача),
@@ -256,7 +279,7 @@ def build_system_prompt_multi(now_str: str, tasks_block: str, max_items: int) ->
 {{
   "items": [
     {{
-      "action": "create | complete",
+      "action": "create | complete | reschedule | delete | rename",
       "title": "строка или null",
       "deadline_iso": "ISO 8601 или null",
       "target_task_hint": "строка или null",
@@ -268,77 +291,74 @@ def build_system_prompt_multi(now_str: str, tasks_block: str, max_items: int) ->
 }}
 
 Важно:
-- Максимум {max_items} элементов в массиве. Бери только самые явные задачи.
+- Максимум {max_items} элементов в массиве. Бери только самые явные задачи/действия.
 - Каждый элемент описывает ОДНУ независимую задачу/действие. Не придумывай лишние.
-- На этом этапе поддерживаем только action = "create" (новая задача) и "complete" (уже выполненная задача).
+- Разрешены action = "create", "complete", "reschedule", "delete", "rename".
 - Если фраза без самостоятельной задачи — пропусти её.
 - Не используй ссылки вроде "ей", "ему", "этой задаче" без содержательных слов. Если нет опоры на текст задачи, лучше вернуть action="unknown" или не создавать элемент.
 - target_task_hint основывай только на словах пользователя; не подставляй текст задач из списка без лексического пересечения с фразой.
+- Переименование ("переименуй", "rename", "измени название") обрабатывай как action = "rename":
+  * title = новое название задачи,
+  * target_task_hint = как пользователь описал текущую задачу,
+  * deadline_iso = null.
+- Не включай куски про сроки ("к пятнице", "by Friday", "на субботу 15:00") в title. Сроки должны отражаться только в deadline_iso.
+- Если во фрагменте есть явная дата/время/день недели/relative ("сегодня", "завтра", "Friday 19:00") — deadline_iso не может быть null. Подготовь корректный ISO.
 
 Правила интерпретации дат/времени (строго как в single-парсере):
 - если указано ТОЛЬКО время → используй СЕГОДНЯШНЮЮ дату относительно "{now_str}" (TZ "{DEFAULT_TIMEZONE}").
 - если указана только дата/день недели/относительный срок ("до понедельника", "в пятницу", "завтра", "через 3 дня") без времени → ставь время 23:59 того дня в "{DEFAULT_TIMEZONE}".
 - если указано время суток без цифр ("утром", "днём", "вечером", "ночью") → ставь соответственно 09:00 / 15:00 / 21:00 / 23:00.
 - если указана и дата, и время → используй их как есть в "{DEFAULT_TIMEZONE}".
+- если указано явное время (09:00, 19:00, 11am) и есть слова "утром/днём/вечером/ночью" — оставляй указанное время как есть; части суток не меняют часы (кроме правила 7 вечера → 19:00).
+- если указан день недели + время ("к понедельнику 12:00", "Friday 19:00") — используй ровно этот день недели и это время без сдвигов.
 - если даты нельзя понять → deadline_iso = null.
 - День недели трактуем как ближайший будущий соответствующий день относительно "{now_str}". "до/к понедельнику" → конец этого дня (23:59).
 
 Как делить исходный текст:
 - Мысленно раздели сообщение на смысловые фрагменты: по предложениям, нумерации ("1.", "2.", "во-первых"), словам "дальше", "потом", переносам строк.
+- Союзы "и/та/а ещё/also/and" между глаголами удаления/создания/выполнения — это отдельные элементы, если там разные задачи.
 - Для каждого фрагмента реши, есть ли явная новая задача или факт выполнения. Если нет — не добавляй элемент.
 - Не более {max_items} элементов из одного сообщения.
 
-Отличия create vs complete:
-- create — планы/намерения/будущее: "надо", "нужно", "хочу", "планирую", формы будущего времени; английский императив ("finish", "book", "send", "schedule") → create.
-- complete — уже свершилось: прошедшее время/слова "сделал", "сделала", "закрыл", "сдал", "готов", "провёл"; английские маркеры "finished", "have finished", "completed", "done".
-- Для complete deadline_iso = null; target_task_hint должен помогать найти задачу из списка.
+Отличия create/complete/reschedule/delete/rename:
+- create — планы/намерения/будущее: "надо", "нужно", "хочу", "планирую", формы будущего времени; английский императив ("finish", "book", "send", "schedule") → create. Title обязателен; не включай сроки ("к пятнице") в title.
+- complete — уже свершилось: прошедшее время/слова "сделал", "сделала", "закрыл", "сдал", "готов", "провёл"; английские маркеры "finished", "have finished", "completed", "done". deadline_iso = null; target_task_hint помогает найти задачу из списка. Если в списке задач есть пересечение по словам — используй максимально похожее название задачи.
+- reschedule — есть глаголы переноса/установки срока ("перенеси", "сдвинь", "move", "reschedule", "поставь/добавь/назначь дедлайн/срок"); deadline_iso = новая дата/время.
+- delete — "удали", "убери", "сотри", "delete", "remove"; deadline_iso = null. Для delete обязателен target_task_hint (по словам пользователя).
+- rename — явная просьба изменить название задачи ("переименуй задачу...", "измени название...", "rename task ..."): title = новое имя, target_task_hint = старая формулировка, deadline_iso = null.
 
 Ниже — актуальные задачи пользователя (для контекста, новые задачи могут быть любыми):
 {tasks_block}
 """
 
 
-def _normalize_deadline_iso(raw_value: Any, raw_text: Optional[str] = None) -> str | None:
+def _guess_deadline_from_text(raw_text: str) -> Optional[datetime]:
     """
-    Нормализует deadline_iso к локальной таймзоне:
-    - если None → None
-    - если строка без tz → считаем, что это локальное время в DEFAULT_TIMEZONE
-    - если строка с tz → переводим в DEFAULT_TIMEZONE
-    - если формат кривой → возвращаем None (лучше без дедлайна, чем сломаться)
+    Грубый fallback, если модель не вернула валидный ISO,
+    но в тексте явно есть день/время.
     """
-    if raw_value is None:
+    if not raw_text:
         return None
 
-    if not isinstance(raw_value, str):
-        return None
+    t_lower = raw_text.lower()
+    now = datetime.now(LOCAL_TZ)
 
-    s = raw_value.strip()
-    if not s:
-        return None
-
-    # Поддержка "Z" в конце
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        # Модель вернула что-то странное → игнорируем дедлайн
-        return None
-
-    # Вспомогательные флаги
-    time_in_text = None
-    if raw_text:
-        m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\b", raw_text)
-        if m:
-            h = int(m.group(1))
-            mm = int(m.group(2)) if m.group(2) else 0
-            if 0 <= h <= 23 and 0 <= mm <= 59:
-                time_in_text = (h, mm)
+    # --- время ---
+    time_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", t_lower)
+    hour = None
+    minute = 0
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2)) if time_match.group(2) else 0
+        meridiem = time_match.group(3)
+        if meridiem:
+            if meridiem == "pm" and hour < 12:
+                hour += 12
+            if meridiem == "am" and hour == 12:
+                hour = 0
 
     part_of_day_hour = None
-    if raw_text:
-        t_lower = raw_text.lower()
+    if hour is None:
         if any(w in t_lower for w in MORNING_WORDS):
             part_of_day_hour = 9
         elif any(w in t_lower for w in DAY_WORDS):
@@ -348,74 +368,170 @@ def _normalize_deadline_iso(raw_value: Any, raw_text: Optional[str] = None) -> s
         elif any(w in t_lower for w in NIGHT_WORDS):
             part_of_day_hour = 23
 
-    # Определяем, было ли время в iso-строке
-    has_time_in_iso = bool(re.search(r"\d{1,2}:\d{2}", s)) or ("T" in s)
+    # --- дата ---
+    target_date = None
+    for word, idx in WEEKDAY_RU.items():
+        if word in t_lower:
+            delta = (idx - now.weekday() + 7) % 7
+            delta = delta or 7  # ближайший будущий
+            target_date = now.date() + timedelta(days=delta)
+            break
+    if target_date is None:
+        for word, idx in WEEKDAY_EN.items():
+            if word in t_lower:
+                delta = (idx - now.weekday() + 7) % 7
+                delta = delta or 7
+                target_date = now.date() + timedelta(days=delta)
+                break
+    if target_date is None:
+        if any(w in t_lower for w in TODAY_WORDS):
+            target_date = now.date()
+        elif any(w in t_lower for w in TOMORROW_WORDS):
+            target_date = (now + timedelta(days=1)).date()
 
+    if target_date is None and hour is not None:
+        target_date = now.date()
+
+    if target_date is None:
+        return None
+
+    if hour is None:
+        hour = part_of_day_hour if part_of_day_hour is not None else 23
+        minute = 59 if part_of_day_hour is None else 0
+
+    return datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        hour,
+        minute,
+        tzinfo=LOCAL_TZ,
+    )
+
+
+def _normalize_deadline_iso(raw_value: Any) -> str | None:
+    """
+    Нормализует deadline_iso:
+    - если модель вернула ISO с таймзоной — не конвертируем время, только форматируем;
+    - если TZ нет — считаем локальной (LOCAL_TZ);
+    - если указана только дата без времени — ставим 23:59 этого дня;
+    - никаких 00:00 по умолчанию.
+    """
+    if raw_value is None or not isinstance(raw_value, str):
+        return None
+
+    s = raw_value.strip()
+    if not s:
+        return None
+
+    # Поддержка "Z" в конце как UTC
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        logger.warning("deadline_iso is not valid ISO: %r", raw_value)
+        return None
+
+    # Определяем, была ли явная часть времени в исходной строке
+    has_explicit_time = ("T" in s) or (" " in s)
+
+    # Если в строке не было времени — ставим 23:59
+    if not has_explicit_time:
+        dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
+    # Если было время, не меняем его
+
+    # Если TZ нет — считаем, что это локальное время пользователя
     if dt.tzinfo is None:
-        # Время без таймзоны → считаем, что это локальное время пользователя
         dt = dt.replace(tzinfo=LOCAL_TZ)
-    else:
-        # Переводим в локальную таймзону
-        dt = dt.astimezone(LOCAL_TZ)
 
-    # Применяем время, приоритезируя явные указания пользователя
-    if time_in_text and part_of_day_hour is not None:
-        hour = time_in_text[0]
-        minute = time_in_text[1]
-        # Если указан вечер/ночь и время в 1-11 → прибавляем 12 часов
-        if part_of_day_hour >= 12 and hour < 12:
-            hour = min(hour + 12, 23)
-        dt = dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    elif time_in_text:
-        dt = dt.replace(hour=time_in_text[0], minute=time_in_text[1], second=0, microsecond=0)
-    elif part_of_day_hour is not None:
-        dt = dt.replace(hour=part_of_day_hour, minute=0, second=0, microsecond=0)
-    elif not has_time_in_iso:
-        # дата без времени → конец дня
-        dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
-    else:
-        # iso содержит время, но если в тексте не было времени и не было времени суток,
-        # прижимаем к 23:59, чтобы убрать "креатив" типа 22:59
-        dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
-
+    # ВАЖНО: не делаем astimezone, чтобы не сдвигать время
     return dt.isoformat()
 
 
-def _sanitize_target_hint(user_text: str, hint: Optional[str]) -> Optional[str]:
+def _sanitize_target_hint(
+    raw_input: str,
+    hint: Optional[str],
+    max_len: int = 120,
+) -> Optional[str]:
     """
-    Сбрасывает target_task_hint, если в нём нет лексического пересечения с текстом пользователя.
-    Это защита от галлюцинаций (подстановка текста чужой задачи).
+    Очищает target_task_hint, не споря с моделью:
+    - оставляем только если это подстрока исходного текста (case-insensitive);
+    - убираем кавычки и служебные символы по краям;
+    - обрезаем по границе слова до max_len;
+    - если связи с текстом нет — возвращаем None.
     """
     if not hint:
-        # Попробуем вытянуть содержательную часть после "про/с" как подсказку
-        m = re.search(r"(?:про|по|с)\s+(.+)", user_text, flags=re.IGNORECASE)
-        if m:
-            extracted = m.group(1).strip()
-            if extracted:
-                hint = extracted
-            else:
-                return None
-        else:
-            return None
-
-    def _stem(token: str) -> str:
-        token = token.lower()
-        return re.sub(
-            r"(ому|ему|ого|ими|ыми|ами|лях|ях|ах|ам|ой|ый|ий|ая|ое|ые|ую|ом|ев|ов|ей|ами?|ях|ях|ах)$",
-            "",
-            token,
-        )
-
-    user_tokens = {_stem(t) for t in re.findall(r"\w+", user_text.lower()) if t}
-    hint_tokens = {_stem(t) for t in re.findall(r"\w+", hint.lower()) if t}
-
-    if not user_tokens or not hint_tokens:
         return None
 
-    if user_tokens.isdisjoint(hint_tokens):
+    candidate = hint.strip().strip(" «»\"'“”„;")
+    if not candidate:
         return None
 
-    return hint
+    raw_lower = raw_input.lower()
+    cand_lower = candidate.lower()
+
+    # Не подсовываем текст, которого не было в реплике пользователя
+    if cand_lower not in raw_lower:
+        return None
+
+    if len(candidate) > max_len:
+        cut = candidate[:max_len]
+        candidate = cut.rsplit(" ", 1)[0] or cut
+
+    return candidate or None
+
+
+def _match_task_title_from_snapshot(
+    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]],
+    hint: Optional[str],
+) -> Optional[str]:
+    """
+    Матч задачи по hint:
+    1) если hint как подстрока встречается ровно в одной задаче — возвращаем её;
+    2) иначе — fuzzy-матч с порогом и пересечением по содержательным словам;
+    3) иначе — None.
+    """
+    if not tasks_snapshot or not hint:
+        return None
+
+    hint_lower = hint.lower()
+
+    # 1) прямое вхождение
+    exact = [text for _, text, _ in tasks_snapshot if hint_lower in text.lower()]
+    if len(exact) == 1:
+        return exact[0]
+
+    # 2) fuzzy с пересечением токенов
+    def _tokens(s: str) -> set[str]:
+        parts = re.split(r"[\s,.;:!?\"'«»„“”()]+", s.lower())
+        return {p for p in parts if len(p) >= 3}
+
+    hint_tokens = _tokens(hint)
+    if not hint_tokens:
+        return None
+
+    best_text: Optional[str] = None
+    best_score: float = 0.0
+
+    for _, text, _ in tasks_snapshot:
+        text_tokens = _tokens(text)
+        # если нет пересечения по смысловым словам — пропускаем
+        if not (hint_tokens & text_tokens):
+            continue
+
+        score = difflib.SequenceMatcher(None, hint_lower, text.lower()).ratio()
+        if score > best_score:
+            best_score = score
+            best_text = text
+
+    return best_text if best_score >= 0.55 else None
+
+
+def _validate_action(value: str) -> str:
+    allowed = {"create", "complete", "reschedule", "delete", "rename", "show_active", "show_today", "show_tomorrow", "show_date", "unknown"}
+    return value if value in allowed else "unknown"
 
 
 def parse_user_input_multi(
@@ -424,7 +540,8 @@ def parse_user_input_multi(
     max_items: int = 5,
 ) -> List[TaskInterpretation]:
     """
-    Парсит сообщение в массив задач/действий (create | complete).
+    Тонкий адаптер над multi-ответом модели. Модель — источник истины,
+    здесь только нормализация формата и бизнес-ограничения.
     """
     now = datetime.now(LOCAL_TZ)
     now_str = now.isoformat()
@@ -453,52 +570,55 @@ def parse_user_input_multi(
     if not isinstance(items, list):
         return []
 
-    results: list[TaskInterpretation] = []
-    unsupported = 0
+    # Бизнес-лимит по количеству операций
+    if len(items) > MAX_ITEMS_PER_REQUEST:
+        logger.warning("Too many items in multi request: %s", len(items))
+        items = items[:MAX_ITEMS_PER_REQUEST]
 
-    for item in items[:max_items]:
+    results: list[TaskInterpretation] = []
+
+    # Посчитаем delete для простого анти-спама
+    delete_count = sum(1 for it in items if isinstance(it, dict) and (it.get("action") or "").strip() == "delete")
+
+    for item in items:
         if not isinstance(item, dict):
             continue
 
-        action = item.get("action")
-        if action not in {"create", "complete"}:
-            unsupported += 1
-            continue
+        action = _validate_action((item.get("action") or "unknown").strip())
 
-        # English imperative mistakenly marked complete -> treat as create
-        if action == "complete":
-            raw_frag = (item.get("raw_input") or user_text or "").lower()
-            past_markers = ["finished", "i finished", "i've finished", "i completed", "completed", "have done", "done", "i did", "i have done", "it's done"]
-            imperative_markers = ["finish", "book", "send", "schedule", "call", "buy", "make", "add", "plan"]
-            has_past = any(pm in raw_frag for pm in past_markers)
-            has_imperative = any(im in raw_frag for im in imperative_markers)
-            if has_imperative and not has_past:
-                action = "create"
-                item["action"] = "create"
+        # Ограничение на массовые удаления
+        if action == "delete" and delete_count > MAX_DELETE_WITHOUT_CONFIRM:
+            action = "unknown"
+            note = "delete_requires_confirmation"
+        else:
+            note = item.get("note")
 
-        ti_dict = dict(item)
-        ti_dict["action"] = action
-        ti_dict["deadline_iso"] = (
-            _normalize_deadline_iso(item.get("deadline_iso"), item.get("raw_input") or user_text)
-            if action == "create"
-            else None
-        )
-        ti_dict["raw_input"] = item.get("raw_input") or user_text
-        ti_dict["target_task_hint"] = _sanitize_target_hint(
-            item.get("raw_input") or user_text, item.get("target_task_hint")
-        )
+        raw_frag = item.get("raw_input") or user_text
+
+        ti_dict: Dict[str, Any] = {
+            "action": action,
+            "title": (item.get("title") or None),
+            "deadline_iso": _normalize_deadline_iso(item.get("deadline_iso")),
+            "target_task_hint": _sanitize_target_hint(raw_frag, item.get("target_task_hint")),
+            "note": note,
+            "language": item.get("language"),
+            "raw_input": raw_frag,
+        }
+
+        # Дополнительный матч title по снапшоту только для целевых действий (без изменения смысла)
+        if action in {"complete", "reschedule", "delete", "rename"} and not ti_dict["title"] and ti_dict["target_task_hint"]:
+            matched_title = _match_task_title_from_snapshot(tasks_snapshot, ti_dict["target_task_hint"])
+            if matched_title:
+                ti_dict["title"] = matched_title
 
         try:
             ti = TaskInterpretation.model_validate(ti_dict)
-            if not ti.title and not ti.raw_input:
+            if ti.action == "create" and not ti.title:
                 continue
             results.append(ti)
         except Exception:
             logger.exception("Failed to validate multi item: %r", ti_dict)
             continue
-
-    if unsupported:
-        logger.info("Multi-parse skipped %d unsupported actions", unsupported)
 
     return results
 
@@ -507,6 +627,9 @@ def parse_user_input(
     user_text: str,
     tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
 ) -> TaskInterpretation:
+    """
+    Single-режим: модель — источник истины, мы только нормализуем формат и проверяем бизнес-ограничения.
+    """
     now = datetime.now(LOCAL_TZ)
     now_str = now.isoformat()
 
@@ -529,36 +652,10 @@ def parse_user_input(
     if "raw_input" not in data or not data["raw_input"]:
         data["raw_input"] = user_text
 
-    data["deadline_iso"] = _normalize_deadline_iso(data.get("deadline_iso"), user_text)
+    data["action"] = _validate_action(data.get("action", "unknown"))
+    data["deadline_iso"] = _normalize_deadline_iso(data.get("deadline_iso"))
     data["target_task_hint"] = _sanitize_target_hint(user_text, data.get("target_task_hint"))
 
-    # Heuristic: если модель решила reschedule, но в тексте нет явных слов переноса —
-    # трактуем как создание новой задачи (защита от ложного reschedule на многофразовые команды).
-    if data.get("action") == "reschedule":
-        lower = user_text.lower()
-        transfer_markers = [
-            "перенеси",
-            "перенести",
-            "сдвинь",
-            "сдвинуть",
-            "измени задачу",
-            "перенесите",
-            "move",
-            "reschedule",
-            "shift",
-            "delay",
-            "добавь дедлайн",
-            "поставь дедлайн",
-            "добавь срок",
-            "поставь срок",
-            "назначь срок",
-            "назначь дедлайн",
-        ]
-        if not any(m in lower for m in transfer_markers):
-            data["action"] = "create"
-            data["title"] = data.get("title") or data.get("raw_input")
-            data["target_task_hint"] = None
-            # deadline оставляем, если был
     # Если про выходные — показываем ближайшие субботу и воскресенье как два дня (через note)
     if data.get("action") in {"show_active", "show_today", "show_tomorrow", "show_date"}:
         lower = user_text.lower()
