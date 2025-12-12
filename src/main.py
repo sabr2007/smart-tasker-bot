@@ -2,10 +2,10 @@
 import logging
 from typing import Optional
 from datetime import datetime, time as dtime, timedelta, date
-from zoneinfo import ZoneInfo
 import difflib
 import re
 import os
+import json
 
 from telegram import (
     Update,
@@ -23,7 +23,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import TELEGRAM_BOT_TOKEN, DEFAULT_TIMEZONE
+from config import TELEGRAM_BOT_TOKEN
 from llm_client import (
     parse_user_input,
     parse_user_input_multi,
@@ -32,10 +32,12 @@ from llm_client import (
 )
 from task_schema import TaskInterpretation
 import db  
+from time_utils import FIXED_TZ, now_local, now_local_iso, normalize_deadline_iso, parse_deadline_iso
+from task_matching import match_task_from_snapshot, MatchResult
 
 # ===== КОНСТАНТЫ =====
 ADMIN_USER_ID = 6113692933
-LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE)
+LOCAL_TZ = FIXED_TZ
 
 # Флаг: автоматом обрабатываем голос (True) или только показываем, что услышали (False)
 ENABLE_VOICE_AUTO_HANDLE = True
@@ -279,54 +281,57 @@ def find_task_by_hint(user_id: int, hint: str):
     Пытается найти задачу по текстовой подсказке.
     Сначала точное вхождение, потом осторожный fuzzy с высоким порогом.
     """
+    # DEPRECATED: оставлено для совместимости со старым кодом.
+    # В новом коде используем match_task_from_snapshot(...) + needs_clarification.
     if not hint:
         return None
-
     tasks = db.get_tasks(user_id)
-    hint_lower = hint.lower().strip()
-
-    # 1) прямое вхождение подстроки — считаем уверенным совпадением
-    candidates: list[tuple[int, str]] = []
-    for t_id, t_text, _ in tasks:
-        if hint_lower in t_text.lower():
-            candidates.append((t_id, t_text))
-
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) > 1:
-        # потом можно сделать диалог уточнения, пока считаем, что это амбиг
-        return None
-
-    # 2) fuzzy по нормализованным словам
-    hint_tokens = _tokenize_meaningful(hint_lower)
-    if not hint_tokens:
-        return None
-
-    best: tuple[int, str] | None = None
-    best_score = 0.0
-    best_overlap = 0
-    for t_id, t_text, _ in tasks:
-        task_tokens = _tokenize_meaningful(t_text)
-        if not task_tokens:
-            continue
-
-        overlap = len(set(hint_tokens) & set(task_tokens))
-        if overlap == 0:
-            continue  # нет общих смысловых слов — пропускаем
-
-        task_join = " ".join(task_tokens)
-        hint_join = " ".join(hint_tokens)
-        score = difflib.SequenceMatcher(None, hint_join, task_join).ratio()
-        if score > best_score:
-            best_score = score
-            best_overlap = overlap
-            best = (t_id, t_text)
-
-    # строгий порог уверенности
-    if best and best_score >= 0.75 and best_overlap >= 1:
-        return best
-
+    mr = match_task_from_snapshot(tasks, hint, raw_input=hint)
+    if mr.matched:
+        return (mr.matched.task_id, mr.matched.task_text)
     return None
+
+
+def _render_clarification_message(mr: MatchResult) -> str:
+    base = "Я не уверен, какую задачу ты имел в виду. Напиши, пожалуйста, полное название задачи целиком, как оно есть в списке."
+    if mr.top:
+        opts = "\n".join([f"- {c.task_text}" for c in mr.top[:3]])
+        return base + "\n\nВозможные варианты:\n" + opts
+    return base
+
+
+def _match_task_or_none(
+    tasks_snapshot,
+    *,
+    target_task_hint: str | None,
+    raw_input: str,
+    action: str,
+) -> tuple[tuple[int, str] | None, MatchResult]:
+    mr = match_task_from_snapshot(tasks_snapshot, target_task_hint, raw_input)
+    logger.info(
+        "task_match %s",
+        json.dumps(
+            {
+                "action": action,
+                "hint": target_task_hint,
+                "raw_input": raw_input,
+                "reason": mr.reason,
+                "threshold": mr.threshold,
+                "top": [{"task_id": c.task_id, "score": c.score, "text": c.task_text} for c in mr.top],
+                "matched": {
+                    "task_id": mr.matched.task_id,
+                    "score": mr.matched.score,
+                    "text": mr.matched.task_text,
+                }
+                if mr.matched
+                else None,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    if mr.matched:
+        return (mr.matched.task_id, mr.matched.task_text), mr
+    return None, mr
 
 
 def is_deadline_like(text: str) -> bool:
@@ -373,7 +378,9 @@ def _format_deadline_human_local(deadline_iso: Optional[str]) -> Optional[str]:
     if not deadline_iso:
         return None
     try:
-        dt = datetime.fromisoformat(deadline_iso).astimezone(LOCAL_TZ)
+        dt = parse_deadline_iso(deadline_iso)
+        if not dt:
+            return None
         return dt.strftime("%d.%m %H:%M")
     except Exception:
         return None
@@ -389,7 +396,9 @@ def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str 
         if not due:
             continue
         try:
-            dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+            dt = parse_deadline_iso(due)
+            if not dt:
+                continue
         except Exception:
             continue
         if dt.date() == target_date:
@@ -433,7 +442,7 @@ def parse_explicit_date(text: str) -> date | None:
     day = int(day_str)
     month = MONTHS_RU[month_word]
 
-    now = datetime.now(LOCAL_TZ)
+    now = now_local()
     year = now.year
 
     try:
@@ -474,7 +483,9 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
     for tid, txt, due in tasks:
         if due:
             try:
-                dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                dt = parse_deadline_iso(due)
+                if not dt:
+                    raise ValueError("invalid due")
                 d_str = dt.strftime("%d.%m %H:%M")
                 with_due.append(f"{len(with_due) + 1}. {txt} (до {d_str})")
             except Exception:
@@ -535,7 +546,9 @@ async def send_archive_list(chat_id: int, user_id: int, context: ContextTypes.DE
     for i, (_tid, txt, _due, completed_at) in enumerate(tasks, 1):
         if completed_at:
             try:
-                dt = datetime.fromisoformat(completed_at).astimezone(LOCAL_TZ)
+                dt = parse_deadline_iso(completed_at)
+                if not dt:
+                    raise ValueError("invalid completed_at")
                 c_str = dt.strftime("%d.%m %H:%M")
                 lines.append(f"{i}. ✅ {txt} — выполнено {c_str}")
             except Exception:
@@ -627,11 +640,13 @@ def schedule_task_reminder(job_queue, task_id: int, task_text: str, deadline_iso
         return
 
     try:
-        dt = datetime.fromisoformat(deadline_iso).astimezone(LOCAL_TZ)
+        dt = parse_deadline_iso(deadline_iso)
+        if not dt:
+            return
     except Exception:
         return
 
-    now = datetime.now(LOCAL_TZ)
+    now = now_local()
     if dt <= now:
         return
 
@@ -652,7 +667,7 @@ def restore_reminders(job_queue):
     if not job_queue:
         return
 
-    now_iso = datetime.now(LOCAL_TZ).isoformat()
+    now_iso = now_local_iso()
     tasks = db.get_active_tasks_with_future_due(now_iso)
 
     for task_id, user_id, text, due_at in tasks:
@@ -737,7 +752,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         service_actions = {"unknown", "show_active", "show_today", "show_tomorrow", "show_date"}
-        meaningful_actions = {"create", "complete", "delete", "reschedule", "rename"}
+        meaningful_actions = {"create", "complete", "delete", "reschedule", "add_deadline", "clear_deadline", "rename"}
 
         # Вариант А: пользователь дал только дату/время → уточнение дедлайна
         if (
@@ -751,8 +766,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             db.update_task_due(user_id, task_id, parsed.deadline_iso)
 
-            dt = datetime.fromisoformat(parsed.deadline_iso).astimezone(LOCAL_TZ)
-            new_time = dt.strftime("%d.%m %H:%M")
+            dt = parse_deadline_iso(parsed.deadline_iso)
+            new_time = dt.strftime("%d.%m %H:%M") if dt else "непонятное время"
 
             schedule_task_reminder(
                 context.job_queue,
@@ -800,7 +815,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         service_actions = {"unknown", "show_active", "show_today", "show_tomorrow", "show_date"}
-        meaningful_actions = {"create", "complete", "delete", "reschedule", "rename"}
+        meaningful_actions = {"create", "complete", "delete", "reschedule", "add_deadline", "clear_deadline", "rename"}
 
         if (
             parsed.deadline_iso
@@ -822,8 +837,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
             )
 
-            dt = datetime.fromisoformat(parsed.deadline_iso).astimezone(LOCAL_TZ)
-            new_time = dt.strftime("%d.%m %H:%M")
+            dt = parse_deadline_iso(parsed.deadline_iso)
+            new_time = dt.strftime("%d.%m %H:%M") if dt else "непонятное время"
             await update.message.reply_text(
                 f"🔄 Перенёс «{task_text}» на {new_time}",
                 reply_markup=MAIN_KEYBOARD,
@@ -849,7 +864,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if question_like:
-        now = datetime.now(LOCAL_TZ)
+        now = now_local()
         target_date = None
 
         if "завтра" in lower_text:
@@ -868,7 +883,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines = []
                 for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
                     try:
-                        dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                        dt = parse_deadline_iso(due)
+                        if not dt:
+                            raise ValueError("invalid due")
                         d_str = dt.strftime("%d.%m %H:%M")
                         lines.append(f"{i}. {txt} (до {d_str})")
                     except Exception:
@@ -887,46 +904,102 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tasks_snapshot = db.get_tasks(user_id)
 
-    # --- Попытка батч-парсинга нескольких действий (create/complete/...) ---#
+    # --- Авто-роутинг single vs multi ---#
     ai_result: Optional[TaskInterpretation] = ai_result_preparsed
     multi_results: list[TaskInterpretation] = []
 
     if ai_result_preparsed is None:
-        try:
-            multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot)
-        except Exception as e:
-            logger.exception("parse_user_input_multi failed for user %s: %s", user_id, e)
+        lower_for_route = text.lower()
+        multi_markers = (";", "\n")
+        has_separator = any(m in text for m in multi_markers) or ("," in text and len(text) > 40)
+        has_connectors = any(w in lower_for_route for w in (" и ", " потом ", " затем ", " также ", " ещё "))
+        route_multi = has_separator or has_connectors
 
-        if multi_results:
-            logger.info(
-                "Multi-parsed %d items for user %s: %s",
-                len(multi_results),
-                user_id,
-                [m.model_dump() for m in multi_results],
-            )
+        logger.info(
+            "parser_route %s",
+            json.dumps(
+                {
+                    "user_id": user_id,
+                    "text": text,
+                    "route": "multi" if route_multi else "single",
+                    "signals": {
+                        "has_separator": has_separator,
+                        "has_connectors": has_connectors,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        )
 
-    # Батч включаем, если есть хотя бы 1 структурированный элемент из допустимых action
-    supported_actions = {"create", "complete", "reschedule", "delete", "rename"}
-    if multi_results and all(m.action in supported_actions for m in multi_results):
+        if route_multi:
+            try:
+                multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot)
+            except Exception as e:
+                logger.exception("parse_user_input_multi failed for user %s: %s", user_id, e)
+
+            if multi_results:
+                logger.info(
+                    "Multi-parsed %d items for user %s: %s",
+                    len(multi_results),
+                    user_id,
+                    [m.model_dump() for m in multi_results],
+                )
+        else:
+            try:
+                ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot)
+            except Exception as e:
+                logger.exception("parse_user_input failed for user %s: %s", user_id, e)
+                await update.message.reply_text(
+                    f"🤯 Мозг сломался: {e}",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+
+    # Батч включаем, если LLM реально вернул несколько действий (или хотя бы одно полезное)
+    supported_actions_multi = {
+        "create",
+        "complete",
+        "reschedule",
+        "add_deadline",
+        "clear_deadline",
+        "delete",
+        "rename",
+        "needs_clarification",
+        "unknown",
+    }
+    if multi_results and all(m.action in supported_actions_multi for m in multi_results):
+        # локальная рабочая копия снапшота, чтобы учитывать create/rename внутри одного сообщения
+        tasks_snapshot_work = list(tasks_snapshot)
         created_lines: list[str] = []
         completed_lines: list[str] = []
         rescheduled_lines: list[str] = []
+        add_deadline_lines: list[str] = []
+        clear_deadline_lines: list[str] = []
         deleted_lines: list[str] = []
         renamed_lines: list[str] = []
         not_found_lines: list[str] = []
+        clarification_lines: list[str] = []
         needs_deadline_lines: list[str] = []
         needs_reschedule_deadline_lines: list[str] = []
         pending_deadline_data: dict | None = None
         pending_reschedule_data: dict | None = None
 
         for item in multi_results:
+            if item.action in {"unknown"}:
+                continue
+            if item.action == "needs_clarification":
+                clarification_lines.append("• нужно уточнение по одной из задач — напиши название полностью.")
+                continue
+
             if item.action == "create":
                 task_text = item.title or item.raw_input
+                norm_due = normalize_deadline_iso(item.deadline_iso)
                 task_id = db.add_task(
                     user_id,
                     task_text,
-                    item.deadline_iso,
+                    norm_due,
                 )
+                tasks_snapshot_work.append((task_id, task_text, norm_due))
 
                 # ставим напоминание только если дедлайн есть и в будущем
                 if item.deadline_iso:
@@ -934,7 +1007,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         context.job_queue,
                         task_id=task_id,
                         task_text=task_text,
-                        deadline_iso=item.deadline_iso,
+                        deadline_iso=norm_due,
                         chat_id=chat_id,
                     )
 
@@ -951,11 +1024,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
 
             elif item.action == "complete":
-                target = find_task_by_hint(user_id, item.target_task_hint or "")
+                target, mr = _match_task_or_none(
+                    tasks_snapshot_work,
+                    target_task_hint=item.target_task_hint,
+                    raw_input=item.raw_input,
+                    action=item.action,
+                )
                 if not target:
-                    not_found_lines.append(
-                        f"• не нашёл задачу для: {item.target_task_hint or 'этого фрагмента'}"
-                    )
+                    clarification_lines.append(_render_clarification_message(mr))
                     continue
 
                 task_id, task_text = target
@@ -963,54 +1039,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.set_task_done(user_id, task_id)
                 completed_lines.append(f"• выполнена: {task_text}")
 
-            elif item.action == "reschedule":
-                target = find_task_by_hint(user_id, item.target_task_hint or "")
+            elif item.action in {"reschedule", "add_deadline"}:
+                target, mr = _match_task_or_none(
+                    tasks_snapshot_work,
+                    target_task_hint=item.target_task_hint,
+                    raw_input=item.raw_input,
+                    action=item.action,
+                )
                 if not target:
-                    not_found_lines.append(
-                        f"• не нашёл задачу для переноса: {item.target_task_hint or 'этого фрагмента'}"
-                    )
+                    clarification_lines.append(_render_clarification_message(mr))
                     continue
                 task_id, task_text = target
+
                 if not item.deadline_iso:
-                    # не стираем дедлайн, просим уточнить дату, как в single-режиме
                     if pending_reschedule_data is None:
                         pending_reschedule_data = {"task_id": task_id, "text": task_text}
                         needs_reschedule_deadline_lines.append(
-                            f"• для переноса «{task_text}» укажи новую дату/время (например, «завтра 18:00» или «нет»)"
+                            f"• для срока по «{task_text}» укажи дату/время (например, «завтра 18:00» или «нет»)"
                         )
                     continue
 
-                db.update_task_due(user_id, task_id, item.deadline_iso)
-                if item.deadline_iso:
-                    schedule_task_reminder(
-                        context.job_queue,
-                        task_id=task_id,
-                        task_text=task_text,
-                        deadline_iso=item.deadline_iso,
-                        chat_id=chat_id,
-                    )
-                human_deadline = _format_deadline_human_local(item.deadline_iso)
-                rescheduled_lines.append(
-                    f"• перенёс: {task_text}" + (f" → {human_deadline}" if human_deadline else "")
+                cancel_task_reminder(task_id, context)
+                new_due = normalize_deadline_iso(item.deadline_iso)
+                db.update_task_due(user_id, task_id, new_due)
+                tasks_snapshot_work = [(tid, txt, (new_due if tid == task_id else due)) for (tid, txt, due) in tasks_snapshot_work]
+                schedule_task_reminder(
+                    context.job_queue,
+                    task_id=task_id,
+                    task_text=task_text,
+                    deadline_iso=new_due,
+                    chat_id=chat_id,
                 )
+                human_deadline = _format_deadline_human_local(item.deadline_iso)
+                if item.action == "add_deadline":
+                    add_deadline_lines.append(
+                        f"• добавил дедлайн: {task_text}" + (f" → {human_deadline}" if human_deadline else "")
+                    )
+                else:
+                    rescheduled_lines.append(
+                        f"• перенёс: {task_text}" + (f" → {human_deadline}" if human_deadline else "")
+                    )
+
+            elif item.action == "clear_deadline":
+                target, mr = _match_task_or_none(
+                    tasks_snapshot_work,
+                    target_task_hint=item.target_task_hint,
+                    raw_input=item.raw_input,
+                    action=item.action,
+                )
+                if not target:
+                    clarification_lines.append(_render_clarification_message(mr))
+                    continue
+                task_id, task_text = target
+                cancel_task_reminder(task_id, context)
+                db.update_task_due(user_id, task_id, None)
+                tasks_snapshot_work = [(tid, txt, (None if tid == task_id else due)) for (tid, txt, due) in tasks_snapshot_work]
+                clear_deadline_lines.append(f"• убрал дедлайн: {task_text}")
 
             elif item.action == "rename":
-                target = find_task_by_hint(user_id, item.target_task_hint or "")
-                if not target or not item.title:
-                    not_found_lines.append(
-                        f"• не нашёл задачу для переименования: {item.target_task_hint or 'этого фрагмента'}"
-                    )
+                target, mr = _match_task_or_none(
+                    tasks_snapshot_work,
+                    target_task_hint=item.target_task_hint,
+                    raw_input=item.raw_input,
+                    action=item.action,
+                )
+                if not target:
+                    clarification_lines.append(_render_clarification_message(mr))
+                    continue
+                if not item.title:
+                    clarification_lines.append("• для переименования нужно новое название.")
                     continue
                 task_id, _task_text = target
                 db.update_task_text(user_id, task_id, item.title)
+                tasks_snapshot_work = [(tid, (item.title if tid == task_id else txt), due) for (tid, txt, due) in tasks_snapshot_work]
                 renamed_lines.append(f"• переименовал: {item.title}")
 
             elif item.action == "delete":
-                target = find_task_by_hint(user_id, item.target_task_hint or "")
+                target, mr = _match_task_or_none(
+                    tasks_snapshot_work,
+                    target_task_hint=item.target_task_hint,
+                    raw_input=item.raw_input,
+                    action=item.action,
+                )
                 if not target:
-                    not_found_lines.append(
-                        f"• не нашёл задачу для удаления: {item.target_task_hint or 'этого фрагмента'}"
-                    )
+                    clarification_lines.append(_render_clarification_message(mr))
                     continue
                 task_id, task_text = target
                 cancel_task_reminder(task_id, context)
@@ -1031,6 +1143,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parts.append("")
             parts.append("Перенёс дедлайны:")
             parts.extend(rescheduled_lines)
+        if add_deadline_lines:
+            if parts:
+                parts.append("")
+            parts.append("Добавил дедлайны:")
+            parts.extend(add_deadline_lines)
+        if clear_deadline_lines:
+            if parts:
+                parts.append("")
+            parts.append("Убрал дедлайны:")
+            parts.extend(clear_deadline_lines)
         if renamed_lines:
             if parts:
                 parts.append("")
@@ -1041,6 +1163,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parts.append("")
             parts.append("Удалил задачи:")
             parts.extend(deleted_lines)
+        if clarification_lines:
+            if parts:
+                parts.append("")
+            parts.append("Нужно уточнение:")
+            parts.extend(clarification_lines[:3])
         if needs_deadline_lines:
             if parts:
                 parts.append("")
@@ -1067,10 +1194,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["pending_reschedule"] = pending_reschedule_data
         return
 
-    if len(multi_results) == 1 and multi_results[0].action in supported_actions:
+    if len(multi_results) == 1 and multi_results[0].action in supported_actions_multi:
         ai_result = multi_results[0]
 
-    if ai_result is None:
+    # Если шли по multi и ничего не получили — fallback в single
+    if ai_result is None and not multi_results:
         try:
             ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot)
         except Exception as e:
@@ -1121,12 +1249,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        target = find_task_by_hint(user_id, target_hint)
+        target, mr = _match_task_or_none(
+            tasks_snapshot,
+            target_task_hint=ai_result.target_task_hint,
+            raw_input=ai_result.raw_input,
+            action=ai_result.action,
+        )
         if not target:
-            await update.message.reply_text(
-                f"🤷‍♂️ Не нашел задачу, похожую на «{target_hint or 'это'}». Попробуй точнее.",
-                reply_markup=MAIN_KEYBOARD,
-            )
+            await update.message.reply_text(_render_clarification_message(mr), reply_markup=MAIN_KEYBOARD)
             return
 
         task_id, _task_text = target
@@ -1147,13 +1277,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = db.add_task(
             user_id,
             task_text,
-            ai_result.deadline_iso,
+            normalize_deadline_iso(ai_result.deadline_iso),
         )
 
         event = {
             "type": "task_created",
             "task_text": task_text,
-            "deadline_iso": ai_result.deadline_iso,
+            "deadline_iso": normalize_deadline_iso(ai_result.deadline_iso),
             "prev_deadline_iso": None,
             "num_active_tasks": len(db.get_tasks(user_id)),
             "language": "ru",
@@ -1174,7 +1304,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.job_queue,
                 task_id=task_id,
                 task_text=task_text,
-                deadline_iso=ai_result.deadline_iso,
+                deadline_iso=normalize_deadline_iso(ai_result.deadline_iso),
                 chat_id=chat_id,
             )
             return
@@ -1193,19 +1323,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ВЫПОЛНЕНИЕ / УДАЛЕНИЕ
     elif ai_result.action in ["complete", "delete"]:
-        target = find_task_by_hint(user_id, ai_result.target_task_hint or "")
+        target, mr = _match_task_or_none(
+            tasks_snapshot,
+            target_task_hint=ai_result.target_task_hint,
+            raw_input=ai_result.raw_input,
+            action=ai_result.action,
+        )
         if not target:
-            event = {
-                "type": "task_not_found",
-                "task_text": None,
-                "deadline_iso": None,
-                "prev_deadline_iso": None,
-                "num_active_tasks": len(db.get_tasks(user_id)),
-                "language": "ru",
-                "extra": {"user_query": ai_result.target_task_hint},
-            }
-            reply_text = safe_render_user_reply(event)
-            await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(_render_clarification_message(mr), reply_markup=MAIN_KEYBOARD)
             return
 
         task_id, task_text = target
@@ -1243,20 +1368,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # ПЕРЕНОС
-    elif ai_result.action == "reschedule":
-        target = find_task_by_hint(user_id, ai_result.target_task_hint or "")
+    elif ai_result.action in ["reschedule", "add_deadline"]:
+        target, mr = _match_task_or_none(
+            tasks_snapshot,
+            target_task_hint=ai_result.target_task_hint,
+            raw_input=ai_result.raw_input,
+            action=ai_result.action,
+        )
         if not target:
-            event = {
-                "type": "task_not_found",
-                "task_text": None,
-                "deadline_iso": None,
-                "prev_deadline_iso": None,
-                "num_active_tasks": len(db.get_tasks(user_id)),
-                "language": "ru",
-                "extra": {"user_query": ai_result.target_task_hint},
-            }
-            reply_text = safe_render_user_reply(event)
-            await update.message.reply_text(reply_text, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(_render_clarification_message(mr), reply_markup=MAIN_KEYBOARD)
             return
 
         task_id, task_text = target
@@ -1277,27 +1397,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prev_task = db.get_task(user_id, task_id)
         prev_deadline = prev_task[2] if prev_task else None
 
-        db.update_task_due(user_id, task_id, ai_result.deadline_iso)
+        db.update_task_due(user_id, task_id, normalize_deadline_iso(ai_result.deadline_iso))
 
         # ставим новое напоминание
         schedule_task_reminder(
             context.job_queue,
             task_id=task_id,
             task_text=task_text,
-            deadline_iso=ai_result.deadline_iso,
+            deadline_iso=normalize_deadline_iso(ai_result.deadline_iso),
             chat_id=chat_id,
         )
 
         event = {
             "type": "task_rescheduled",
             "task_text": task_text,
-            "deadline_iso": ai_result.deadline_iso,
+            "deadline_iso": normalize_deadline_iso(ai_result.deadline_iso),
             "prev_deadline_iso": prev_deadline,
             "num_active_tasks": len(db.get_tasks(user_id)),
             "language": "ru",
             "extra": {},
         }
         reply_text = safe_render_user_reply(event)
+    elif ai_result.action == "clear_deadline":
+        target, mr = _match_task_or_none(
+            tasks_snapshot,
+            target_task_hint=ai_result.target_task_hint,
+            raw_input=ai_result.raw_input,
+            action=ai_result.action,
+        )
+        if not target:
+            await update.message.reply_text(_render_clarification_message(mr), reply_markup=MAIN_KEYBOARD)
+            return
+        task_id, task_text = target
+        cancel_task_reminder(task_id, context)
+        prev_task = db.get_task(user_id, task_id)
+        prev_deadline = prev_task[2] if prev_task else None
+        db.update_task_due(user_id, task_id, None)
+        event = {
+            "type": "task_rescheduled",
+            "task_text": task_text,
+            "deadline_iso": None,
+            "prev_deadline_iso": prev_deadline,
+            "num_active_tasks": len(db.get_tasks(user_id)),
+            "language": "ru",
+            "extra": {"action": "clear_deadline"},
+        }
+        reply_text = safe_render_user_reply(event)
+        await update.message.reply_text(
+            reply_text,
+            parse_mode="HTML",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+    elif ai_result.action == "needs_clarification":
+        await update.message.reply_text(
+            "Я не уверен, что именно нужно сделать. Напиши, пожалуйста, полное название задачи целиком, как оно есть в списке.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
 
         await update.message.reply_text(
             reply_text,
@@ -1310,12 +1467,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_date = None
         weekend_mode = False
         if ai_result.action == "show_today":
-            target_date = datetime.now(LOCAL_TZ).date()
+            target_date = now_local().date()
         elif ai_result.action == "show_tomorrow":
-            target_date = (datetime.now(LOCAL_TZ) + timedelta(days=1)).date()
+            target_date = (now_local() + timedelta(days=1)).date()
         elif ai_result.action == "show_date" and ai_result.deadline_iso:
             try:
-                target_date = datetime.fromisoformat(ai_result.deadline_iso).astimezone(LOCAL_TZ).date()
+                dt = parse_deadline_iso(ai_result.deadline_iso)
+                target_date = dt.date() if dt else None
             except Exception:
                 target_date = None
         if ai_result.action == "show_date" and getattr(ai_result, "note", None) == "weekend":
@@ -1324,7 +1482,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_date:
             if weekend_mode:
                 # показываем ближайшие субботу и воскресенье
-                today = datetime.now(LOCAL_TZ).date()
+                today = now_local().date()
                 weekday = today.weekday()  # 0=Mon
                 days_to_sat = (5 - weekday) % 7
                 days_to_sun = (6 - weekday) % 7
@@ -1338,7 +1496,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines = []
                         for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
                             try:
-                                dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                                dt = parse_deadline_iso(due)
+                                if not dt:
+                                    raise ValueError("invalid due")
                                 d_str = dt.strftime("%d.%m %H:%M")
                                 lines.append(f"{i}. {txt} (до {d_str})")
                             except Exception:
@@ -1360,7 +1520,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines = []
                     for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
                         try:
-                            dt = datetime.fromisoformat(due).astimezone(LOCAL_TZ)
+                            dt = parse_deadline_iso(due)
+                            if not dt:
+                                raise ValueError("invalid due")
                             d_str = dt.strftime("%d.%m %H:%M")
                             lines.append(f"{i}. {txt} (до {d_str})")
                         except Exception:

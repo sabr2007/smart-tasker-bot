@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 ActionType = Literal[
     "create",       # создать новую задачу
     "reschedule",   # перенести/поменять дедлайн
+    "add_deadline", # добавить дедлайн существующей задаче (если не было)
+    "clear_deadline", # убрать дедлайн у существующей задачи
     "complete",     # отметить задачу выполненной
     "delete",       # удалить задачу
     "rename",       # переименовать задачу
@@ -13,6 +15,7 @@ ActionType = Literal[
     "show_today",   # показать задачи на сегодня
     "show_tomorrow",# показать задачи на завтра
     "show_date",    # показать задачи на конкретную дату
+    "needs_clarification", # нужно уточнение у пользователя (без выполнения действия)
     "unknown",      # не понял, что хочет пользователь
 ]
 
@@ -25,7 +28,7 @@ class TaskInterpretation(BaseModel):
 
     action: ActionType = Field(
         ...,
-        description="Тип операции над задачами: create / reschedule / complete / delete / show_* / unknown",
+        description="Тип операции над задачами: create / reschedule / add_deadline / clear_deadline / complete / delete / rename / show_* / needs_clarification / unknown",
     )
 
     title: Optional[str] = Field(
@@ -37,7 +40,7 @@ class TaskInterpretation(BaseModel):
         None,
         description=(
             "Дата и время дедлайна в ISO 8601 с таймзоной, если есть. "
-            "Например: '2025-12-05T19:00:00+06:00'"
+            "Например: '2025-12-05T19:00:00+05:00'"
         ),
     )
 

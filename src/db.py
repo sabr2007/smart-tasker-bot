@@ -6,6 +6,8 @@ import os
 from typing import List, Tuple, Optional
 from datetime import datetime
 
+from time_utils import normalize_deadline_iso, now_local_iso
+
 
 DB_PATH = os.getenv("DB_PATH", "tasks.db")
 
@@ -86,11 +88,34 @@ def init_db():
         if "category" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN category TEXT")
 
+        # --- Нормализация TZ в уже сохранённых данных (фиксируем +05:00, убираем +06:00) ---
+        try:
+            cursor.execute("SELECT id, due_at FROM tasks WHERE due_at IS NOT NULL")
+            rows = cursor.fetchall()
+            for task_id, due_at in rows:
+                norm = normalize_deadline_iso(due_at)
+                if norm and norm != due_at:
+                    cursor.execute("UPDATE tasks SET due_at = ? WHERE id = ?", (norm, task_id))
+        except Exception:
+            # миграция best-effort
+            pass
+
+        try:
+            cursor.execute("SELECT id, due_at FROM tasks_history WHERE due_at IS NOT NULL")
+            rows = cursor.fetchall()
+            for hid, due_at in rows:
+                norm = normalize_deadline_iso(due_at)
+                if norm and norm != due_at:
+                    cursor.execute("UPDATE tasks_history SET due_at = ? WHERE id = ?", (norm, hid))
+        except Exception:
+            pass
+
         conn.commit()
 
 
 def add_task(user_id: int, text: str, due_at_iso: Optional[str] = None, category: Optional[str] = None) -> int:
     """Добавляет задачу и возвращает её ID."""
+    due_at_iso = normalize_deadline_iso(due_at_iso)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -209,6 +234,7 @@ def _archive_task_snapshot(task_row: Optional[dict], reason: str, deleted_at: Op
 
 def update_task_due(user_id: int, task_id: int, due_at_iso: Optional[str]):
     """Обновляет дедлайн задачи."""
+    due_at_iso = normalize_deadline_iso(due_at_iso)
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -232,7 +258,7 @@ def update_task_text(user_id: int, task_id: int, new_text: str):
 def delete_task(user_id: int, task_id: int):
     """Удаляет задачу (физически)."""
     task_row = _fetch_task_row(user_id, task_id)
-    deleted_at_iso = datetime.now().isoformat()
+    deleted_at_iso = now_local_iso()
     if task_row:
         task_row["deleted_at"] = deleted_at_iso
         _archive_task_snapshot(task_row, reason="deleted", deleted_at=deleted_at_iso)
@@ -248,7 +274,7 @@ def delete_task(user_id: int, task_id: int):
 
 def set_task_done(user_id: int, task_id: int):
     """Помечает задачу выполненной (status='done')."""
-    now_iso = datetime.now().isoformat()
+    now_iso = now_local_iso()
     task_row = _fetch_task_row(user_id, task_id)
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -300,7 +326,7 @@ def clear_archived_tasks(user_id: int) -> None:
         rows = cursor.fetchall()
 
     if rows:
-        deleted_at_iso = datetime.now().isoformat()
+        deleted_at_iso = now_local_iso()
         for row in rows:
             (
                 tid,
