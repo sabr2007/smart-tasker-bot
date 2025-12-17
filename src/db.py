@@ -33,6 +33,8 @@ def init_db():
                 text TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 due_at TEXT,
+                remind_at TEXT,            -- следующее запланированное напоминание (ISO)
+                remind_offset_min INTEGER, -- предпочтение "за сколько" (минут) относительно due_at; null если задано абсолютное remind_at
                 notified INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'active',
                 completed_at TEXT,
@@ -87,6 +89,10 @@ def init_db():
             cursor.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
         if "category" not in columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN category TEXT")
+        if "remind_at" not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN remind_at TEXT")
+        if "remind_offset_min" not in columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN remind_offset_min INTEGER")
 
         # --- Нормализация TZ в уже сохранённых данных (фиксируем +05:00, убираем +06:00) ---
         try:
@@ -116,11 +122,13 @@ def init_db():
 def add_task(user_id: int, text: str, due_at_iso: Optional[str] = None, category: Optional[str] = None) -> int:
     """Добавляет задачу и возвращает её ID."""
     due_at_iso = normalize_deadline_iso(due_at_iso)
+    remind_at_iso = due_at_iso if due_at_iso else None
+    remind_offset_min = 0 if due_at_iso else None
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO tasks (user_id, text, due_at, category) VALUES (?, ?, ?, ?)",
-            (user_id, text, due_at_iso, category),
+            "INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category),
         )
         return cursor.lastrowid
 
@@ -165,7 +173,7 @@ def _fetch_task_row(user_id: int, task_id: int):
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, user_id, text, created_at, due_at, status, completed_at, category
+            SELECT id, user_id, text, created_at, due_at, remind_at, remind_offset_min, status, completed_at, category
             FROM tasks
             WHERE id = ? AND user_id = ?
             """,
@@ -180,6 +188,8 @@ def _fetch_task_row(user_id: int, task_id: int):
             text,
             created_at,
             due_at,
+            remind_at,
+            remind_offset_min,
             status,
             completed_at,
             category,
@@ -190,11 +200,52 @@ def _fetch_task_row(user_id: int, task_id: int):
             "text": text,
             "created_at": created_at,
             "due_at": due_at,
+            "remind_at": remind_at,
+            "remind_offset_min": remind_offset_min,
             "status": status,
             "completed_at": completed_at,
             "category": category,
             "source": None,
         }
+
+
+def get_task_reminder_settings(user_id: int, task_id: int) -> tuple[Optional[str], Optional[int], Optional[str], Optional[str]]:
+    """
+    Возвращает (remind_at, remind_offset_min, due_at, text) для задачи или (None, None, None, None), если не найдена.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT remind_at, remind_offset_min, due_at, text FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None, None, None, None
+        remind_at, remind_offset_min, due_at, text = row
+        return remind_at, remind_offset_min, due_at, text
+
+
+def update_task_reminder_settings(
+    user_id: int,
+    task_id: int,
+    *,
+    remind_at_iso: Optional[str],
+    remind_offset_min: Optional[int],
+) -> None:
+    """
+    Обновляет настройки напоминания у задачи.
+    - remind_at_iso: следующее напоминание (ISO) или None (не напоминать)
+    - remind_offset_min: предпочтение "за сколько" в минутах (0/5/30/60/...), или None если remind_at задан как абсолютное время
+    """
+    remind_at_iso = normalize_deadline_iso(remind_at_iso)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE tasks SET remind_at = ?, remind_offset_min = ? WHERE id = ? AND user_id = ?",
+            (remind_at_iso, remind_offset_min, task_id, user_id),
+        )
+        conn.commit()
 
 
 def _archive_task_snapshot(task_row: Optional[dict], reason: str, deleted_at: Optional[str] = None):
@@ -406,6 +457,49 @@ def get_active_tasks_with_future_due(now_iso: str):
             WHERE (status IS NULL OR status = 'active')
               AND due_at IS NOT NULL
               AND due_at > ?
+            ORDER BY due_at ASC
+            """,
+            (now_iso,),
+        )
+        return cursor.fetchall()
+
+
+def get_active_tasks_with_future_remind(now_iso: str):
+    """
+    Возвращает активные задачи с ближайшим напоминанием в будущем.
+    Формат: (id, user_id, text, due_at, remind_at, remind_offset_min)
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, text, due_at, remind_at, remind_offset_min
+            FROM tasks
+            WHERE (status IS NULL OR status = 'active')
+              AND remind_at IS NOT NULL
+              AND remind_at > ?
+            ORDER BY remind_at ASC
+            """,
+            (now_iso,),
+        )
+        return cursor.fetchall()
+
+
+def get_active_tasks_with_future_due_without_remind(now_iso: str):
+    """
+    Fallback для старых/переходных задач: дедлайн в будущем, но remind_at не задан.
+    Формат: (id, user_id, text, due_at)
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, text, due_at
+            FROM tasks
+            WHERE (status IS NULL OR status = 'active')
+              AND due_at IS NOT NULL
+              AND due_at > ?
+              AND remind_at IS NULL
             ORDER BY due_at ASC
             """,
             (now_iso,),
