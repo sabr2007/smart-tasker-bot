@@ -507,7 +507,7 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
                     raise ValueError("invalid due")
                 d_str = dt.strftime("%d.%m %H:%M")
                 overdue = dt < now
-                suffix = f"(до {d_str}" + (", просрочено)" if overdue else ")")
+                suffix = f"(до {d_str}" + (", просрочено🚨)" if overdue else ")")
                 with_due.append(f"{len(with_due) + 1}. {txt} {suffix}")
             except Exception:
                 with_due.append(f"{len(with_due) + 1}. {txt}")
