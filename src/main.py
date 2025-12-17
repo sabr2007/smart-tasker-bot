@@ -486,6 +486,7 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
     «Отметить задачу выполненной» + возвращает нижнее меню.
     """
     tasks = db.get_tasks(user_id)
+    now = now_local()
 
     if not tasks:
         await context.bot.send_message(
@@ -505,7 +506,9 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
                 if not dt:
                     raise ValueError("invalid due")
                 d_str = dt.strftime("%d.%m %H:%M")
-                with_due.append(f"{len(with_due) + 1}. {txt} (до {d_str})")
+                overdue = dt < now
+                suffix = f"(до {d_str}" + (", просрочено)" if overdue else ")")
+                with_due.append(f"{len(with_due) + 1}. {txt} {suffix}")
             except Exception:
                 with_due.append(f"{len(with_due) + 1}. {txt}")
         else:
@@ -628,11 +631,19 @@ def _snooze_keyboard(task_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Выполнено ✅", callback_data=f"done_task:{task_id}"),
                 InlineKeyboardButton("Отложить ⏳", callback_data=f"snooze_prompt:{task_id}"),
             ],
+        ]
+    )
+
+
+def _snooze_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    """Инлайн-выбор длительности отложенного напоминания."""
+    return InlineKeyboardMarkup(
+        [
             [
                 InlineKeyboardButton("+5 мин", callback_data=f"snooze:{task_id}:5"),
                 InlineKeyboardButton("+30 мин", callback_data=f"snooze:{task_id}:30"),
                 InlineKeyboardButton("+1 час", callback_data=f"snooze:{task_id}:60"),
-            ],
+            ]
         ]
     )
 
@@ -2006,12 +2017,18 @@ async def on_snooze_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
+    # Запоминаем контекст для ввода текстом и показываем клавиатуру выбора.
     context.user_data["pending_snooze"] = {"task_id": task_id}
+    keyboard = _snooze_choice_keyboard(task_id)
+
     if query.message:
-        await query.message.reply_text(
-            "На сколько отложить напоминание?\n\nНапиши, например: «через 5 минут», «через 30 минут» или «в 18:10».",
-            reply_markup=MAIN_KEYBOARD,
-        )
+        try:
+            await query.edit_message_reply_markup(reply_markup=keyboard)
+        except Exception:
+            await query.message.reply_text(
+                "На сколько отложить напоминание?",
+                reply_markup=keyboard,
+            )
 
 
 async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
