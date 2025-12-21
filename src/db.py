@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -9,7 +10,11 @@ import aiosqlite
 
 from time_utils import normalize_deadline_iso, now_local_iso
 
-DB_PATH = os.getenv("DB_PATH", "tasks.db")
+DB_PATH = os.getenv("DB_PATH")
+if not DB_PATH:
+    # По умолчанию используем tasks.db рядом с исходниками (src/tasks.db),
+    # чтобы бот и WebApp гарантированно смотрели в один и тот же файл вне зависимости от cwd.
+    DB_PATH = str((Path(__file__).resolve().parent / "tasks.db"))
 
 
 @asynccontextmanager

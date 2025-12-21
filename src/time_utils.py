@@ -246,3 +246,22 @@ def parse_datetime_from_text(
     return None
 
 
+def compute_remind_at_from_offset(due_iso: str, offset_min: int) -> str | None:
+    """
+    Считает remind_at = due_at - offset_min (в минутах).
+    Если получилось в прошлом — напомним "почти сразу" (через ~10 секунд).
+    Возвращает ISO в фиксированной TZ (+05:00) или None.
+    """
+    try:
+        due_dt = parse_deadline_iso(due_iso)
+        if not due_dt:
+            return None
+        now = now_local()
+        remind_dt = due_dt - timedelta(minutes=max(int(offset_min), 0))
+        if remind_dt <= now:
+            remind_dt = now + timedelta(seconds=10)
+        return normalize_deadline_iso(remind_dt.isoformat())
+    except Exception:
+        return None
+
+

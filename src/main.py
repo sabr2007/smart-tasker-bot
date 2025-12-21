@@ -12,6 +12,8 @@ from telegram import (
     Update,
     Message,
     ReplyKeyboardMarkup,
+    KeyboardButton,
+    WebAppInfo,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
@@ -24,7 +26,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import TELEGRAM_BOT_TOKEN
+from config import TELEGRAM_BOT_TOKEN, WEBAPP_URL
 from llm_client import (
     parse_user_input,
     parse_user_input_multi,
@@ -42,6 +44,7 @@ from time_utils import (
     parse_offset_minutes,
     parse_delay_minutes,
     parse_datetime_from_text,
+    compute_remind_at_from_offset,
 )
 from task_matching import match_task_from_snapshot, MatchResult
 
@@ -187,7 +190,15 @@ def safe_render_user_reply(event: dict) -> str:
 # ==== КЛАВИАТУРЫ =====
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [["Показать задачи", "Еще"]],
+    [
+        [
+            KeyboardButton("Показать задачи"),
+            KeyboardButton("Еще"),
+        ],
+        [
+            KeyboardButton("Открыть панель задач", web_app=WebAppInfo(url=WEBAPP_URL)),
+        ],
+    ],
     resize_keyboard=True,
 )
 
@@ -647,24 +658,6 @@ def _snooze_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def _compute_remind_at_from_offset(due_iso: str, offset_min: int) -> str | None:
-    """
-    Считает remind_at = due_at - offset_min (в минутах).
-    Если получилось в прошлом — напомним "почти сразу" (через ~10 секунд).
-    """
-    try:
-        due_dt = parse_deadline_iso(due_iso)
-        if not due_dt:
-            return None
-        now = now_local()
-        remind_dt = due_dt - timedelta(minutes=max(offset_min, 0))
-        if remind_dt <= now:
-            remind_dt = now + timedelta(seconds=10)
-        return normalize_deadline_iso(remind_dt.isoformat())
-    except Exception:
-        return None
-
-
 async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Job-функция: отправляет напоминание по задаче.
@@ -942,7 +935,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if offset_min is None:
                 new_remind_at = new_due
             else:
-                new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
+                new_remind_at = compute_remind_at_from_offset(new_due, offset_min) if new_due else None
             await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
             schedule_task_reminder(
@@ -997,7 +990,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-                new_remind_at = _compute_remind_at_from_offset(due_at, offset_min)
+                new_remind_at = compute_remind_at_from_offset(due_at, offset_min)
                 if not new_remind_at:
                     await update.message.reply_text(
                         "Не смог понять время напоминания. Выбери кнопку или напиши «за 30 минут».",
@@ -1326,7 +1319,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if offset_min is None:
                     new_remind_at = new_due
                 else:
-                    new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
+                    new_remind_at = compute_remind_at_from_offset(new_due, offset_min) if new_due else None
                 await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
                 schedule_task_reminder(
@@ -1687,7 +1680,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if offset_min is None:
             new_remind_at = new_due
         else:
-            new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
+            new_remind_at = compute_remind_at_from_offset(new_due, offset_min) if new_due else None
         await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
         # ставим новое напоминание
@@ -1989,7 +1982,7 @@ async def on_remind_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-    new_remind_at = _compute_remind_at_from_offset(due_at, offset_min)
+    new_remind_at = compute_remind_at_from_offset(due_at, offset_min)
     if not new_remind_at:
         await query.edit_message_text("Не смог настроить напоминание. Попробуй выбрать другую опцию.")
         return
