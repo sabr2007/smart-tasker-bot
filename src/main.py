@@ -2200,7 +2200,12 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==== MAIN =====
 
 def main():
-    asyncio.run(db.init_db())
+    # Важно для Python 3.11+: python-telegram-bot (20.x) внутри run_polling()
+    # использует asyncio.get_event_loop(). Если перед этим вызвать asyncio.run(...),
+    # то он создаст и закроет loop, оставив в MainThread "no current event loop".
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(db.init_db())
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
