@@ -1,4 +1,6 @@
+#requirements.txt
 openai>=1.6.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
 python-telegram-bot[job-queue]==20.8
+aiosqlite>=0.20.0

@@ -1,4 +1,5 @@
 # src/main.py
+import asyncio
 import logging
 from typing import Optional
 from datetime import datetime, time as dtime, timedelta, date
@@ -294,16 +295,14 @@ def detect_rename_intent(text: str):
     return None
 
 
-def find_task_by_hint(user_id: int, hint: str):
+async def find_task_by_hint(user_id: int, hint: str):
     """
     Пытается найти задачу по текстовой подсказке.
     Сначала точное вхождение, потом осторожный fuzzy с высоким порогом.
     """
-    # DEPRECATED: оставлено для совместимости со старым кодом.
-    # В новом коде используем match_task_from_snapshot(...) + needs_clarification.
     if not hint:
         return None
-    tasks = db.get_tasks(user_id)
+    tasks = await db.get_tasks(user_id)
     mr = match_task_from_snapshot(tasks, hint, raw_input=hint)
     if mr.matched:
         return (mr.matched.task_id, mr.matched.task_text)
@@ -404,11 +403,11 @@ def _format_deadline_human_local(deadline_iso: Optional[str]) -> Optional[str]:
         return None
 
 
-def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
+async def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
     """
     Возвращает задачи, дедлайн которых совпадает с датой target_date (в локальной TZ).
     """
-    tasks = db.get_tasks(user_id)
+    tasks = await db.get_tasks(user_id)
     result = []
     for t_id, text, due in tasks:
         if not due:
@@ -485,7 +484,7 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
     Отправляет список активных задач + inline-кнопку
     «Отметить задачу выполненной» + возвращает нижнее меню.
     """
-    tasks = db.get_tasks(user_id)
+    tasks = await db.get_tasks(user_id)
     now = now_local()
 
     if not tasks:
@@ -554,7 +553,7 @@ async def send_archive_list(chat_id: int, user_id: int, context: ContextTypes.DE
     """
     Отправляет архив выполненных задач.
     """
-    tasks = db.get_archived_tasks(user_id)
+    tasks = await db.get_archived_tasks(user_id)
     if not tasks:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -700,7 +699,7 @@ async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Ежедневный дайджест: в 07:30 отправляет всем список активных задач.
     """
-    user_ids = db.get_users_with_active_tasks()
+    user_ids = await db.get_users_with_active_tasks()
     if not user_ids:
         return
 
@@ -739,14 +738,14 @@ def schedule_task_reminder(
     delay = (dt - now).total_seconds()
     job_queue.run_once(
         send_task_reminder,
-        when=delay,
+        when=timedelta(seconds=delay),
         chat_id=chat_id,
         name=f"reminder:{task_id}",
         data={"task_id": task_id, "text": task_text},
     )
 
 
-def restore_reminders(job_queue):
+async def restore_reminders(job_queue):
     """
     После рестарта бота восстанавливает напоминания по активным задачам с будущими дедлайнами.
     """
@@ -754,7 +753,7 @@ def restore_reminders(job_queue):
         return
 
     now_iso = now_local_iso()
-    tasks = db.get_active_tasks_with_future_remind(now_iso)
+    tasks = await db.get_active_tasks_with_future_remind(now_iso)
     for task_id, user_id, text, due_at, remind_at, _offset_min in tasks:
         schedule_task_reminder(
             job_queue,
@@ -766,9 +765,16 @@ def restore_reminders(job_queue):
         )
 
     # fallback: дедлайн в будущем, но remind_at ещё не задан
-    fallback = db.get_active_tasks_with_future_due_without_remind(now_iso)
+    fallback = await db.get_active_tasks_with_future_due_without_remind(now_iso)
     for task_id, user_id, text, due_at in fallback:
         schedule_task_reminder(job_queue, task_id, text, deadline_iso=due_at, chat_id=user_id)
+
+
+async def restore_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запускается один раз при старте, чтобы восстановить напоминания из БД."""
+    if not context.job_queue:
+        return
+    await restore_reminders(context.job_queue)
 
 
 # ==== ОСНОВНОЙ ХЭНДЛЕР ТЕКСТА =====
@@ -839,7 +845,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            parsed = parse_user_input(text, tasks_snapshot=db.get_tasks(user_id))
+            parsed = parse_user_input(text, tasks_snapshot=await db.get_tasks(user_id))
         except Exception:
             context.user_data.pop("pending_deadline", None)
             await update.message.reply_text(
@@ -862,9 +868,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task_text = pending["text"]
 
             due_norm = normalize_deadline_iso(parsed.deadline_iso)
-            db.update_task_due(user_id, task_id, due_norm)
+            await db.update_task_due(user_id, task_id, due_norm)
             # дефолтное напоминание: в дедлайн
-            db.update_task_reminder_settings(user_id, task_id, remind_at_iso=due_norm, remind_offset_min=0)
+            await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=due_norm, remind_offset_min=0)
 
             dt = parse_deadline_iso(due_norm)
             new_time = dt.strftime("%d.%m %H:%M") if dt else "непонятное время"
@@ -906,7 +912,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            parsed = parse_user_input(text, tasks_snapshot=db.get_tasks(user_id))
+            parsed = parse_user_input(text, tasks_snapshot=await db.get_tasks(user_id))
         except Exception:
             context.user_data.pop("pending_reschedule", None)
             await update.message.reply_text(
@@ -929,15 +935,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             cancel_task_reminder(task_id, context)
             new_due = normalize_deadline_iso(parsed.deadline_iso)
-            db.update_task_due(user_id, task_id, new_due)
+            await db.update_task_due(user_id, task_id, new_due)
 
             # пересчитываем напоминание с учётом сохранённого offset (если есть)
-            _remind_at, offset_min, _due_at_db, _task_text_db = db.get_task_reminder_settings(user_id, task_id)
+            _remind_at, offset_min, _due_at_db, _task_text_db = await db.get_task_reminder_settings(user_id, task_id)
             if offset_min is None:
                 new_remind_at = new_due
             else:
                 new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
-            db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+            await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
             schedule_task_reminder(
                 context.job_queue,
@@ -971,12 +977,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(task_id, int):
             lower = text.lower().strip()
 
-            remind_at, remind_offset_min, due_at, task_text_db = db.get_task_reminder_settings(user_id, task_id)
+            remind_at, remind_offset_min, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
             deadline_dt = parse_deadline_iso(due_at) if due_at else None
 
             if lower in NO_REMINDER_PHRASES:
                 cancel_task_reminder(task_id, context)
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
                 context.user_data.pop("pending_reminder_choice", None)
                 await update.message.reply_text("Ок, не буду напоминать по этой задаче.", reply_markup=MAIN_KEYBOARD)
                 return
@@ -1000,7 +1006,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 cancel_task_reminder(task_id, context)
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
                 schedule_task_reminder(
                     context.job_queue,
                     task_id=task_id,
@@ -1028,7 +1034,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 remind_iso = normalize_deadline_iso(dt.isoformat())
                 cancel_task_reminder(task_id, context)
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=None)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=None)
                 schedule_task_reminder(
                     context.job_queue,
                     task_id=task_id,
@@ -1085,10 +1091,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 context.user_data.pop("pending_snooze", None)
             else:
-                _remind_at, offset_min, due_at, task_text_db = db.get_task_reminder_settings(user_id, task_id)
+                _remind_at, offset_min, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
                 remind_iso = normalize_deadline_iso(dt.isoformat())
                 cancel_task_reminder(task_id, context)
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
                 schedule_task_reminder(
                     context.job_queue,
                     task_id=task_id,
@@ -1129,7 +1135,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_date = explicit
 
         if target_date:
-            tasks_for_day = filter_tasks_by_date(user_id, target_date)
+            tasks_for_day = await filter_tasks_by_date(user_id, target_date)
             if tasks_for_day:
                 lines = []
                 for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
@@ -1153,7 +1159,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-    tasks_snapshot = db.get_tasks(user_id)
+    tasks_snapshot = await db.get_tasks(user_id)
 
     # --- Авто-роутинг single vs multi ---#
     ai_result: Optional[TaskInterpretation] = ai_result_preparsed
@@ -1245,7 +1251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if item.action == "create":
                 task_text = item.title or item.raw_input
                 norm_due = normalize_deadline_iso(item.deadline_iso)
-                task_id = db.add_task(
+                task_id = await db.add_task(
                     user_id,
                     task_text,
                     norm_due,
@@ -1287,7 +1293,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 task_id, task_text = target
                 cancel_task_reminder(task_id, context)
-                db.set_task_done(user_id, task_id)
+                await db.set_task_done(user_id, task_id)
                 completed_lines.append(f"• выполнена: {task_text}")
 
             elif item.action in {"reschedule", "add_deadline"}:
@@ -1312,16 +1318,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 cancel_task_reminder(task_id, context)
                 new_due = normalize_deadline_iso(item.deadline_iso)
-                db.update_task_due(user_id, task_id, new_due)
+                await db.update_task_due(user_id, task_id, new_due)
                 tasks_snapshot_work = [(tid, txt, (new_due if tid == task_id else due)) for (tid, txt, due) in tasks_snapshot_work]
 
                 # пересчитываем remind_at с учётом сохранённого offset (если есть)
-                _remind_at, offset_min, _due_db, task_text_db = db.get_task_reminder_settings(user_id, task_id)
+                _remind_at, offset_min, _due_db, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
                 if offset_min is None:
                     new_remind_at = new_due
                 else:
                     new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
                 schedule_task_reminder(
                     context.job_queue,
@@ -1353,8 +1359,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     continue
                 task_id, task_text = target
                 cancel_task_reminder(task_id, context)
-                db.update_task_due(user_id, task_id, None)
-                db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
+                await db.update_task_due(user_id, task_id, None)
+                await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
                 tasks_snapshot_work = [(tid, txt, (None if tid == task_id else due)) for (tid, txt, due) in tasks_snapshot_work]
                 clear_deadline_lines.append(f"• убрал дедлайн: {task_text}")
 
@@ -1372,7 +1378,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     clarification_lines.append("• для переименования нужно новое название.")
                     continue
                 task_id, _task_text = target
-                db.update_task_text(user_id, task_id, item.title)
+                await db.update_task_text(user_id, task_id, item.title)
                 tasks_snapshot_work = [(tid, (item.title if tid == task_id else txt), due) for (tid, txt, due) in tasks_snapshot_work]
                 renamed_lines.append(f"• переименовал: {item.title}")
 
@@ -1388,7 +1394,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     continue
                 task_id, task_text = target
                 cancel_task_reminder(task_id, context)
-                db.delete_task(user_id, task_id)
+                await db.delete_task(user_id, task_id)
                 deleted_lines.append(f"• удалена: {task_text}")
 
         parts: list[str] = []
@@ -1522,7 +1528,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         task_id, _task_text = target
-        db.update_task_text(user_id, task_id, ai_result.title)
+        await db.update_task_text(user_id, task_id, ai_result.title)
         await update.message.reply_text(
             f"✏️ Переименовал задачу: <b>{ai_result.title}</b>",
             parse_mode="HTML",
@@ -1536,7 +1542,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ai_result.action == "create":
         task_text = ai_result.title or ai_result.raw_input
 
-        task_id = db.add_task(
+        task_id = await db.add_task(
             user_id,
             task_text,
             normalize_deadline_iso(ai_result.deadline_iso),
@@ -1572,7 +1578,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "task_text": task_text,
             "deadline_iso": normalize_deadline_iso(ai_result.deadline_iso),
             "prev_deadline_iso": None,
-            "num_active_tasks": len(db.get_tasks(user_id)),
+            "num_active_tasks": len(await db.get_tasks(user_id)),
             "language": "ru",
             "extra": {},
         }
@@ -1614,24 +1620,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cancel_task_reminder(task_id, context)
 
         if ai_result.action == "complete":
-            db.set_task_done(user_id, task_id)
+            await db.set_task_done(user_id, task_id)
             event = {
                 "type": "task_completed",
                 "task_text": task_text,
                 "deadline_iso": None,
                 "prev_deadline_iso": None,
-                "num_active_tasks": len(db.get_tasks(user_id)),
+                "num_active_tasks": len(await db.get_tasks(user_id)),
                 "language": "ru",
                 "extra": {},
             }
         else:
-            db.delete_task(user_id, task_id)
+            await db.delete_task(user_id, task_id)
             event = {
                 "type": "task_deleted",
                 "task_text": task_text,
                 "deadline_iso": None,
                 "prev_deadline_iso": None,
-                "num_active_tasks": len(db.get_tasks(user_id)),
+                "num_active_tasks": len(await db.get_tasks(user_id)),
                 "language": "ru",
                 "extra": {},
             }
@@ -1670,19 +1676,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # снимаем старое напоминание
         cancel_task_reminder(task_id, context)
 
-        prev_task = db.get_task(user_id, task_id)
+        prev_task = await db.get_task(user_id, task_id)
         prev_deadline = prev_task[2] if prev_task else None
 
         new_due = normalize_deadline_iso(ai_result.deadline_iso)
-        db.update_task_due(user_id, task_id, new_due)
+        await db.update_task_due(user_id, task_id, new_due)
 
         # пересчитываем следующее напоминание, сохраняя "за сколько" (offset), если оно задано
-        _remind_at, offset_min, _due_at_db, task_text_db = db.get_task_reminder_settings(user_id, task_id)
+        _remind_at, offset_min, _due_at_db, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
         if offset_min is None:
             new_remind_at = new_due
         else:
             new_remind_at = _compute_remind_at_from_offset(new_due, offset_min) if new_due else None
-        db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
 
         # ставим новое напоминание
         schedule_task_reminder(
@@ -1699,7 +1705,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "task_text": task_text,
             "deadline_iso": new_due,
             "prev_deadline_iso": prev_deadline,
-            "num_active_tasks": len(db.get_tasks(user_id)),
+            "num_active_tasks": len(await db.get_tasks(user_id)),
             "language": "ru",
             "extra": {},
         }
@@ -1722,16 +1728,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         task_id, task_text = target
         cancel_task_reminder(task_id, context)
-        prev_task = db.get_task(user_id, task_id)
+        prev_task = await db.get_task(user_id, task_id)
         prev_deadline = prev_task[2] if prev_task else None
-        db.update_task_due(user_id, task_id, None)
-        db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
+        await db.update_task_due(user_id, task_id, None)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
         event = {
             "type": "task_rescheduled",
             "task_text": task_text,
             "deadline_iso": None,
             "prev_deadline_iso": prev_deadline,
-            "num_active_tasks": len(db.get_tasks(user_id)),
+            "num_active_tasks": len(await db.get_tasks(user_id)),
             "language": "ru",
             "extra": {"action": "clear_deadline"},
         }
@@ -1778,7 +1784,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 parts = []
                 for label, d in [("Суббота", sat_date), ("Воскресенье", sun_date)]:
-                    tasks_for_day = filter_tasks_by_date(user_id, d)
+                    tasks_for_day = await filter_tasks_by_date(user_id, d)
                     if tasks_for_day:
                         lines = []
                         for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
@@ -1802,7 +1808,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=MAIN_KEYBOARD,
                     )
             else:
-                tasks_for_day = filter_tasks_by_date(user_id, target_date)
+                tasks_for_day = await filter_tasks_by_date(user_id, target_date)
                 if tasks_for_day:
                     lines = []
                     for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
@@ -1826,7 +1832,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await send_tasks_list(chat_id, user_id, context)
 
-        tasks_now = db.get_tasks(user_id)
+        tasks_now = await db.get_tasks(user_id)
         event = {
             "type": "show_tasks" if tasks_now else "no_tasks",
             "task_text": None,
@@ -1849,7 +1855,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "task_text": None,
             "deadline_iso": None,
             "prev_deadline_iso": None,
-            "num_active_tasks": len(db.get_tasks(user_id)),
+            "num_active_tasks": len(await db.get_tasks(user_id)),
             "language": "ru",
             "extra": {"reason": "unknown_intent"},
         }
@@ -1871,7 +1877,7 @@ async def on_mark_done_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    tasks = db.get_tasks(user_id)
+    tasks = await db.get_tasks(user_id)
 
     if not tasks:
         await query.edit_message_text("Активных задач нет 🙂")
@@ -1914,14 +1920,14 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     cancel_task_reminder(task_id, context)
 
     # найдём текст задачи, чтобы красиво показать
-    tasks = db.get_tasks(user_id)
+    tasks = await db.get_tasks(user_id)
     task_text = None
     for tid, txt, _ in tasks:
         if tid == task_id:
             task_text = txt
             break
 
-    db.set_task_done(user_id, task_id)
+    await db.set_task_done(user_id, task_id)
 
     if task_text:
         await query.edit_message_text(
@@ -1942,7 +1948,7 @@ async def on_clear_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    db.clear_archived_tasks(user_id)
+    await db.clear_archived_tasks(user_id)
 
     await query.edit_message_text("Архив очищен 🙂")
 
@@ -1965,7 +1971,7 @@ async def on_remind_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat_id if query.message else user_id
 
-    _remind_at, _offset_min, due_at, task_text = db.get_task_reminder_settings(user_id, task_id)
+    _remind_at, _offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
     if not due_at:
         await query.edit_message_text("У этой задачи нет дедлайна — напоминание не настроить.")
         context.user_data.pop("pending_reminder_choice", None)
@@ -1973,7 +1979,7 @@ async def on_remind_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if val == "off":
         cancel_task_reminder(task_id, context)
-        db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
         await query.edit_message_text("Ок, не буду напоминать по этой задаче.")
         context.user_data.pop("pending_reminder_choice", None)
         return
@@ -1989,7 +1995,7 @@ async def on_remind_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     cancel_task_reminder(task_id, context)
-    db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+    await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
     schedule_task_reminder(
         context.job_queue,
         task_id=task_id,
@@ -2054,9 +2060,9 @@ async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dt = now + timedelta(minutes=max(minutes, 0))
     remind_iso = normalize_deadline_iso(dt.isoformat())
 
-    _remind_at, offset_min, due_at, task_text = db.get_task_reminder_settings(user_id, task_id)
+    _remind_at, offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
     cancel_task_reminder(task_id, context)
-    db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
+    await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
     schedule_task_reminder(
         context.job_queue,
         task_id=task_id,
@@ -2175,7 +2181,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = " ".join(context.args)
-    user_ids = db.get_users_with_active_tasks()
+    user_ids = await db.get_users_with_active_tasks()
     if not user_ids:
         await update.message.reply_text("Нет пользователей с активными задачами.")
         return
@@ -2194,7 +2200,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==== MAIN =====
 
 def main():
-    db.init_db()
+    asyncio.run(db.init_db())
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -2223,8 +2229,8 @@ def main():
             time=dtime(hour=7, minute=30, tzinfo=LOCAL_TZ),
             name="daily_digest",
         )
-        # восстановим напоминания для задач с будущими дедлайнами
-        restore_reminders(app.job_queue)
+        # восстановим напоминания для задач с будущими дедлайнами (после старта event loop)
+        app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
 
     print("AI Smart-Tasker запущен... 🚀")
     app.run_polling()
