@@ -531,4 +531,3 @@ async def get_active_tasks_with_future_due_without_remind(now_iso: str):
         ) as cur:
             return await cur.fetchall()
 
-
