@@ -1,4 +1,4 @@
-(() => {
+document.addEventListener("DOMContentLoaded", () => {
   const FIXED_OFFSET = "+05:00";
 
   const statusEl = document.getElementById("status");
@@ -7,18 +7,20 @@
   const newDueEl = document.getElementById("newDue");
   const btnAdd = document.getElementById("btnAdd");
 
-  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-  if (tg) {
-    try { tg.ready(); } catch (_) {}
+  const tg = window.Telegram?.WebApp;
+
+  if (!tg) {
+    statusEl.textContent = "Telegram WebApp не обнаружен";
+    return;
   }
 
-  function setStatus(msg) {
-    statusEl.textContent = msg || "";
-  }
+  tg.ready();
+  tg.expand?.();
 
   function getInitData() {
-    return tg && tg.initData ? tg.initData : "";
+    return tg.initData || "";
   }
+
 
   async function apiFetch(path, opts = {}) {
     const initData = getInitData();
