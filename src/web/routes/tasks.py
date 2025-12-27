@@ -19,6 +19,13 @@ class TaskOut(BaseModel):
     due_at: Optional[str] = None
 
 
+class ArchivedTaskOut(BaseModel):
+    id: int
+    text: str
+    due_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
 class TaskCreateIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
     deadline_iso: Optional[str] = None
@@ -34,11 +41,29 @@ def _task_tuple_to_out(row: tuple[int, str, Optional[str]]) -> TaskOut:
     return TaskOut(id=int(tid), text=text, due_at=normalize_deadline_iso(due) if due else None)
 
 
+def _archived_tuple_to_out(row: tuple[int, str, Optional[str], Optional[str]]) -> ArchivedTaskOut:
+    tid, text, due, completed_at = row
+    return ArchivedTaskOut(
+        id=int(tid),
+        text=text,
+        due_at=normalize_deadline_iso(due) if due else None,
+        completed_at=normalize_deadline_iso(completed_at) if completed_at else None,
+    )
+
+
 @router.get("", response_model=list[TaskOut])
 async def list_tasks(user=Depends(get_current_user)):
     user_id = int(user["user_id"])
     rows = await db.get_tasks(user_id)
     return [_task_tuple_to_out(r) for r in rows]
+
+
+@router.get("/archive", response_model=list[ArchivedTaskOut])
+async def list_archived_tasks(user=Depends(get_current_user), limit: int = 50):
+    user_id = int(user["user_id"])
+    limit = max(1, min(int(limit), 200))
+    rows = await db.get_archived_tasks(user_id, limit=limit)
+    return [_archived_tuple_to_out(r) for r in rows]
 
 
 @router.get("/{task_id}", response_model=TaskOut)

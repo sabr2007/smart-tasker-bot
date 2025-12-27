@@ -22,24 +22,40 @@ body {
   color: var(--tg-theme-text-color);
 }
 
-.page {
-  padding: 14px 14px 24px;
-  max-width: 720px;
-  margin: 0 auto;
+.app {
+  height: 100%;
 }
 
-.topbar {
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--tg-theme-bg-color);
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+  border-bottom-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
 }
 
-.title {
+.header-title {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 750;
   letter-spacing: -0.2px;
+}
+
+.content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 58px) 14px calc(env(safe-area-inset-bottom, 0px) + 78px);
+}
+
+.view {
+  display: block;
 }
 
 .icon-btn {
@@ -53,8 +69,18 @@ body {
   border-radius: 10px;
 }
 
+.icon-btn.small {
+  padding: 6px 10px;
+}
+
 .icon-btn:active {
   opacity: 0.7;
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .status {
@@ -244,5 +270,244 @@ body {
 .hidden {
   display: none !important;
 }
+
+/* Tabs */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--tg-theme-secondary-bg-color);
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+  border-top-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
+  padding: 8px 10px calc(env(safe-area-inset-bottom, 0px) + 10px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--tg-theme-hint-color);
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+.tab:active {
+  opacity: 0.8;
+}
+
+.tab.active {
+  color: var(--tg-theme-button-color);
+}
+
+.tab-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.tab-label {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+/* Calendar */
+.calendar {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.calendar-title {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  color: var(--tg-theme-hint-color);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 0 2px 8px;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.day {
+  position: relative;
+  height: 42px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tg-theme-bg-color) 75%, transparent);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--tg-theme-text-color);
+  display: grid;
+  place-items: center;
+  font-weight: 650;
+  user-select: none;
+}
+
+.day.muted {
+  color: var(--tg-theme-hint-color);
+  opacity: 0.75;
+}
+
+.day.selected {
+  outline: 2px solid var(--tg-theme-button-color);
+  outline-offset: -2px;
+}
+
+.day:active {
+  opacity: 0.85;
+}
+
+.dot {
+  position: absolute;
+  bottom: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--tg-theme-button-color);
+}
+
+.day-panel {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.day-title {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--tg-theme-hint-color);
+  padding: 0 6px;
+}
+
+/* Overlay (Settings) */
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.32);
+  background: color-mix(in srgb, var(--tg-theme-text-color) 35%, transparent);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--tg-theme-bg-color);
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.overlay-header {
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+  border-bottom-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+}
+
+.overlay-title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.overlay-content {
+  padding: 14px;
+}
+
+.overlay-subheader {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.overlay-subtitle {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.menu {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.menu-item {
+  width: 100%;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--tg-theme-text-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 12px;
+  text-align: left;
+}
+
+.menu-item + .menu-item {
+  border-top: 1px solid rgba(127, 127, 127, 0.22);
+  border-top-color: color-mix(in srgb, var(--tg-theme-hint-color) 25%, transparent);
+}
+
+.menu-item:active {
+  opacity: 0.85;
+}
+
+.menu-item.static {
+  cursor: default;
+}
+
+.menu-left {
+  min-width: 0;
+}
+
+.menu-title {
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.menu-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+}
+
+.menu-right {
+  color: var(--tg-theme-hint-color);
+  font-size: 18px;
+}
+
+/* Bottom sheet should appear above tabbar/overlay layers */
+.sheet-backdrop { z-index: 30; }
+.sheet { z-index: 31; }
 
 
