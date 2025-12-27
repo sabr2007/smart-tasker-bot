@@ -9,8 +9,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const tg = window.Telegram?.WebApp;
 
+  function setStatus(msg) {
+    if (!statusEl) return;
+    statusEl.textContent = msg ? String(msg) : "";
+  }
+
   if (!tg) {
-    statusEl.textContent = "Telegram WebApp не обнаружен";
+    setStatus("Telegram WebApp не обнаружен");
     return;
   }
 
@@ -169,7 +174,11 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       await loadTasks();
     } catch (e) {
-      setStatus(String(e && e.message ? e.message : e));
+      const msg = String(e && e.message ? e.message : e);
+      setStatus(msg);
+      try {
+        tg.showAlert?.(msg);
+      } catch (_) {}
     }
   })();
 })();
