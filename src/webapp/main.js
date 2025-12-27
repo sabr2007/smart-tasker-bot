@@ -30,15 +30,33 @@ document.addEventListener("DOMContentLoaded", () => {
   tg.ready();
   tg.expand?.();
 
+  const INIT_DATA_CACHE_KEY = "tma_init_data_v1";
+
   function getInitData() {
-    return tg.initData || "";
+    const live = tg.initData || "";
+    if (live) {
+      try {
+        localStorage.setItem(INIT_DATA_CACHE_KEY, live);
+      } catch (_) {}
+      return live;
+    }
+    // Fallback: иногда Telegram открывает ссылку как обычную страницу внутри приложения,
+    // и tg.initData оказывается пустым. В таком случае пробуем использовать кэш от
+    // предыдущего успешного открытия Mini App на этом же домене.
+    try {
+      return localStorage.getItem(INIT_DATA_CACHE_KEY) || "";
+    } catch (_) {
+      return "";
+    }
   }
 
 
   async function apiFetch(path, opts = {}) {
     const initData = getInitData();
     if (!initData) {
-      throw new Error("Откройте WebApp внутри Telegram (initData пустой).");
+      throw new Error(
+        "initData пустой. Откройте Mini App через кнопку «Open/Меню» в Telegram хотя бы один раз, затем можно открывать и из клавиатуры."
+      );
     }
     const headers = Object.assign({}, opts.headers || {}, {
       "Authorization": "tma " + initData,
@@ -54,6 +72,12 @@ document.addEventListener("DOMContentLoaded", () => {
         detail = data && data.detail ? String(data.detail) : JSON.stringify(data);
       } catch (_) {
         detail = await res.text();
+      }
+      // Если initData устарел/неверный — сбрасываем кэш, чтобы заставить пере-открытие из Telegram
+      if (res.status === 401) {
+        try {
+          localStorage.removeItem(INIT_DATA_CACHE_KEY);
+        } catch (_) {}
       }
       throw new Error(`API error ${res.status}: ${detail}`);
     }
