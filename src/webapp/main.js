@@ -284,12 +284,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   sheetEditBtn?.addEventListener("click", async () => {
     if (!activeTask) return;
-    const nt = prompt("Новый текст задачи:", activeTask.text || "");
+    const task = activeTask;
+    const taskId = task.id;
+    const nt = prompt("Новый текст задачи:", task.text || "");
     if (nt == null) return;
     const trimmed = String(nt).trim();
     if (!trimmed) return;
     closeSheet();
-    await apiFetch(`/api/tasks/${activeTask.id}`, {
+    await apiFetch(`/api/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify({ text: trimmed }),
     });
@@ -298,14 +300,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   sheetRescheduleBtn?.addEventListener("click", async () => {
     if (!activeTask) return;
+    const task = activeTask;
+    const taskId = task.id;
     const nd = prompt(
       "Новый дедлайн:\n- пусто = снять дедлайн\n- YYYY-MM-DD\n- YYYY-MM-DD HH:MM",
-      activeTask.due_at ? String(activeTask.due_at) : ""
+      task.due_at ? String(task.due_at) : ""
     );
     if (nd == null) return;
     const parsed = parseDeadlineInput(nd);
     closeSheet();
-    await apiFetch(`/api/tasks/${activeTask.id}`, {
+    await apiFetch(`/api/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify({ deadline_iso: parsed }),
     });
@@ -314,8 +318,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   sheetClearDeadlineBtn?.addEventListener("click", async () => {
     if (!activeTask) return;
+    const taskId = activeTask.id;
     closeSheet();
-    await apiFetch(`/api/tasks/${activeTask.id}`, {
+    await apiFetch(`/api/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify({ deadline_iso: null }),
     });
@@ -325,8 +330,9 @@ document.addEventListener("DOMContentLoaded", () => {
   sheetDeleteBtn?.addEventListener("click", async () => {
     if (!activeTask) return;
     if (!confirm("Удалить задачу?")) return;
+    const taskId = activeTask.id;
     closeSheet();
-    await apiFetch(`/api/tasks/${activeTask.id}`, { method: "DELETE" });
+    await apiFetch(`/api/tasks/${taskId}`, { method: "DELETE" });
     await loadTasks();
   });
 
