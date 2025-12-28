@@ -193,19 +193,8 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [
             KeyboardButton("Показать задачи"),
-            KeyboardButton("Еще"),
-        ],
-        [
             KeyboardButton("Открыть панель задач", web_app=WebAppInfo(url=WEBAPP_URL)),
         ],
-    ],
-    resize_keyboard=True,
-)
-
-EXTRA_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        ["Архив задач", "Инструкция"],
-        ["Назад"],
     ],
     resize_keyboard=True,
 )
@@ -789,30 +778,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_tasks_list(chat_id, user_id, context)
         return
 
-    if text == "Еще":
-        await update.message.reply_text(
-            "Дополнительные функции:",
-            reply_markup=EXTRA_KEYBOARD,
-        )
-        return
 
-    if text == "Архив задач":
-        await send_archive_list(chat_id, user_id, context)
-        return
-
-    if text == "Инструкция":
-        await update.message.reply_text(
-            INSTRUCTION_TEXT,
-            reply_markup=EXTRA_KEYBOARD,
-        )
-        return
-
-    if text == "Назад":
-        await update.message.reply_text(
-            "Возвращаюсь в главное меню.",
-            reply_markup=MAIN_KEYBOARD,
-        )
-        return
 
     # --- Приветствие / онбординг ---
     if is_greeting_only(text):
