@@ -27,6 +27,8 @@ def get_current_user(
     try:
         parsed = verify_telegram_init_data(init_data)
     except TelegramInitDataError as e:
+        import logging
+        logging.getLogger("web.deps").error(f"Auth failed: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
 
     user = parsed.get("user")
