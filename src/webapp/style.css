@@ -1,513 +1,374 @@
 :root {
-  /* Telegram theme fallbacks (used when WebApp vars are not injected, e.g. local browser) */
   --tg-theme-bg-color: #ffffff;
   --tg-theme-secondary-bg-color: #f4f4f5;
-  --tg-theme-text-color: #111111;
+  --tg-theme-text-color: #000000;
   --tg-theme-hint-color: #707579;
   --tg-theme-button-color: #3390ec;
   --tg-theme-button-text-color: #ffffff;
   --tg-theme-destructive-text-color: #ff3b30;
+  --tg-theme-header-bg-color: #ffffff;
 }
+
+[v-cloak] { display: none !important; }
 
 * { box-sizing: border-box; }
 
 html, body {
   height: 100%;
-}
-
-body {
   margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--tg-theme-bg-color);
   color: var(--tg-theme-text-color);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* App handles scrolling */
 }
 
-.app {
+/* Loader */
+.app-loader {
+  display: flex;
   height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--tg-theme-hint-color);
+  border-top-color: var(--tg-theme-button-color);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* App Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
 }
 
+/* Header */
 .header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 20;
-  background: var(--tg-theme-bg-color);
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
-  border-bottom-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
+  flex-shrink: 0;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  background: var(--tg-theme-bg-color);
+  z-index: 10;
 }
-
 .header-title {
-  font-size: 18px;
-  font-weight: 750;
-  letter-spacing: -0.2px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
 }
-
-.content {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: calc(env(safe-area-inset-top, 0px) + 58px) 14px calc(env(safe-area-inset-bottom, 0px) + 78px);
-}
-
-.view {
-  display: block;
-}
-
 .icon-btn {
-  appearance: none;
+  background: none;
   border: none;
-  background: transparent;
+  padding: 8px;
   color: var(--tg-theme-button-color);
-  font-size: 18px;
-  line-height: 1;
-  padding: 8px 10px;
-  border-radius: 10px;
-}
-
-.icon-btn.small {
-  padding: 6px 10px;
-}
-
-.icon-btn:active {
-  opacity: 0.7;
-}
-
-.icon {
-  width: 20px;
-  height: 20px;
-  display: block;
-}
-
-.status {
-  font-size: 13px;
-  color: var(--tg-theme-hint-color);
-  min-height: 18px;
-}
-
-.sections {
-  margin-top: 12px;
-  display: grid;
-  gap: 14px;
-}
-
-.section-title {
-  padding: 0 10px 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tg-theme-hint-color);
-}
-
-.list {
-  background: var(--tg-theme-secondary-bg-color);
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.task-row {
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 12px;
+  justify-content: center;
+  border-radius: 8px;
+  transition: opacity 0.2s;
+}
+.icon-btn:active { opacity: 0.6; }
+
+/* Main Content */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 100px; /* Space for bottom tabbar */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Status / Empty States */
+.status-msg {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--tg-theme-hint-color);
+  font-size: 15px;
+}
+
+/* Task Groups */
+.task-group {
+  margin-bottom: 24px;
+}
+.group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+/* Task Item */
+.task-item {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  transition: transform 0.2s, opacity 0.2s;
   cursor: pointer;
-  user-select: none;
-  transition: opacity 180ms ease, transform 180ms ease;
 }
+.task-item:active { transform: scale(0.98); }
 
-.task-row + .task-row {
-  border-top: 1px solid rgba(127, 127, 127, 0.22);
-  border-top-color: color-mix(in srgb, var(--tg-theme-hint-color) 25%, transparent);
-}
-
-.task-row.is-removing {
-  opacity: 0;
-  transform: translateY(-2px);
-}
-
-.check {
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
-  border-radius: 999px;
+.task-checkbox {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
   border: 2px solid var(--tg-theme-hint-color);
-  background: transparent;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  color: var(--tg-theme-button-text-color);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
 }
-
-.check:active {
-  transform: scale(0.96);
-}
-
-.check.is-checked {
+.task-checkbox.done {
   border-color: var(--tg-theme-button-color);
   background: var(--tg-theme-button-color);
+  color: #fff;
+}
+.task-checkbox svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.2s;
+}
+.task-checkbox.done svg {
+  opacity: 1;
+  transform: scale(1);
 }
 
-.check .checkmark {
-  font-size: 14px;
-  line-height: 1;
-  transform: translateY(-0.5px);
-}
-
-.task-main {
+.task-content {
   flex: 1;
   min-width: 0;
 }
-
 .task-text {
-  font-size: 15px;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
+  word-break: break-word;
 }
-
 .task-meta {
-  margin-top: 3px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--tg-theme-hint-color);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
+.task-meta.overdue { color: var(--tg-theme-destructive-text-color); }
 
-.task-meta.overdue {
-  color: var(--tg-theme-destructive-text-color);
+/* Tabbar */
+.tabbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--tg-theme-secondary-bg-color);
+  border-top: 1px solid rgba(0,0,0,0.05); /* very subtle */
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-around;
+  z-index: 20;
 }
-
-.menu-btn {
-  appearance: none;
+.tab-btn {
+  background: none;
   border: none;
-  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   color: var(--tg-theme-hint-color);
-  font-size: 18px;
-  line-height: 1;
-  padding: 8px 10px;
-  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  width: 60px;
 }
+.tab-btn.active { color: var(--tg-theme-button-color); }
+.tab-btn svg { width: 24px; height: 24px; }
 
-.menu-btn:active {
-  opacity: 0.7;
-}
-
-/* Bottom sheet */
+/* Bottom Sheet */
 .sheet-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
-  background: color-mix(in srgb, var(--tg-theme-text-color) 35%, transparent);
+  background: rgba(0,0,0,0.4);
+  z-index: 50;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.sheet-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .sheet {
   position: fixed;
+  bottom: 0;
   left: 0;
   right: 0;
-  bottom: 0;
   background: var(--tg-theme-bg-color);
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
-  padding: 10px 12px 16px;
-  box-shadow: 0 -20px 60px rgba(0, 0, 0, 0.22);
-  box-shadow: 0 -20px 60px color-mix(in srgb, var(--tg-theme-text-color) 22%, transparent);
-  transform: translateY(8px);
+  border-radius: 20px 20px 0 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  z-index: 51;
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
 }
+.sheet.open { transform: translateY(0); }
 
 .sheet-handle {
-  width: 36px;
-  height: 4px;
-  border-radius: 999px;
-  margin: 2px auto 10px;
-  background: rgba(127, 127, 127, 0.35);
-  background: color-mix(in srgb, var(--tg-theme-hint-color) 35%, transparent);
-}
-
-.sheet-title {
-  font-size: 14px;
-  font-weight: 700;
-  padding: 0 4px 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sheet-actions {
-  display: grid;
-  gap: 8px;
-}
-
-.sheet-btn {
-  width: 100%;
-  padding: 12px 12px;
-  border-radius: 12px;
-  border: none;
+  width: 40px;
+  height: 5px;
   background: var(--tg-theme-secondary-bg-color);
-  color: var(--tg-theme-text-color);
-  font-size: 15px;
-  font-weight: 600;
+  border-radius: 100px;
+  align-self: center;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+/* Sheet Modes */
+.sheet-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
   text-align: center;
 }
 
-.sheet-btn.secondary {
-  background: transparent;
-  color: var(--tg-theme-button-color);
-}
-
-.sheet-btn.danger {
-  color: var(--tg-theme-destructive-text-color);
-}
-
-.sheet-btn:active {
-  opacity: 0.8;
-}
-
-.hidden {
-  display: none !important;
-}
-
-/* Tabs */
-.tabbar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  background: var(--tg-theme-secondary-bg-color);
-  border-top: 1px solid rgba(127, 127, 127, 0.18);
-  border-top-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
-  padding: 8px 10px calc(env(safe-area-inset-bottom, 0px) + 10px);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+/* Action Menu */
+.action-list {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
-
-.tab {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--tg-theme-hint-color);
-  display: grid;
-  place-items: center;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 12px;
-}
-
-.tab:active {
-  opacity: 0.8;
-}
-
-.tab.active {
-  color: var(--tg-theme-button-color);
-}
-
-.tab-icon {
-  width: 22px;
-  height: 22px;
-  display: block;
-}
-
-.tab-label {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-/* Calendar */
-.calendar {
+.action-btn {
   background: var(--tg-theme-secondary-bg-color);
-  border-radius: 14px;
+  border: none;
+  padding: 14px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--tg-theme-text-color);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.action-btn:active { transform: scale(0.98); opacity: 0.8; }
+.action-btn.danger { color: var(--tg-theme-destructive-text-color); }
+.action-btn svg { width: 20px; height: 20px; opacity: 0.7; }
+
+/* Edit Form */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.input-field {
+  width: 100%;
+  padding: 12px;
+  background: var(--tg-theme-secondary-bg-color);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 16px;
+  color: var(--tg-theme-text-color);
+  resize: none;
+}
+.input-field:focus {
+  outline: none;
+  border-color: var(--tg-theme-button-color);
+}
+.primary-btn {
+  background: var(--tg-theme-button-color);
+  color: #fff;
+  border: none;
+  padding: 14px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+.primary-btn:disabled { opacity: 0.5; }
+
+/* Reschedule UI */
+.quick-dates {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+  -webkit-overflow-scrolling: touch;
+}
+.chip {
+  flex-shrink: 0;
+  background: var(--tg-theme-secondary-bg-color);
+  border: 1px solid transparent;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--tg-theme-text-color);
+}
+.chip.selected {
+  background: var(--tg-theme-button-color);
+  color: #fff;
+  border-color: var(--tg-theme-button-color);
+}
+
+/* Minimal Calendar Styles (Sheet) */
+.mini-calendar {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
   padding: 12px;
 }
-
-.calendar-header {
+.mc-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
+  align-items: center;
+  margin-bottom: 12px;
 }
-
-.calendar-title {
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.calendar-weekdays {
+.mc-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 6px;
-  color: var(--tg-theme-hint-color);
-  font-size: 11px;
-  font-weight: 650;
-  padding: 0 2px 8px;
-}
-
-.calendar-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 6px;
-}
-
-.day {
-  position: relative;
-  height: 42px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--tg-theme-bg-color) 75%, transparent);
-  background: rgba(255, 255, 255, 0.55);
-  color: var(--tg-theme-text-color);
-  display: grid;
-  place-items: center;
-  font-weight: 650;
-  user-select: none;
-}
-
-.day.muted {
-  color: var(--tg-theme-hint-color);
-  opacity: 0.75;
-}
-
-.day.selected {
-  outline: 2px solid var(--tg-theme-button-color);
-  outline-offset: -2px;
-}
-
-.day:active {
-  opacity: 0.85;
-}
-
-.dot {
-  position: absolute;
-  bottom: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--tg-theme-button-color);
-}
-
-.day-panel {
-  margin-top: 12px;
-  display: grid;
-  gap: 8px;
-}
-
-.day-title {
-  font-size: 13px;
-  font-weight: 750;
-  color: var(--tg-theme-hint-color);
-  padding: 0 6px;
-}
-
-/* Overlay (Settings) */
-.overlay-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: rgba(0, 0, 0, 0.32);
-  background: color-mix(in srgb, var(--tg-theme-text-color) 35%, transparent);
-}
-
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: var(--tg-theme-bg-color);
-  display: grid;
-  grid-template-rows: auto 1fr;
-}
-
-.overlay-header {
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
-  border-bottom-color: color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-}
-
-.overlay-title {
+  gap: 4px;
   text-align: center;
-  font-size: 16px;
-  font-weight: 800;
 }
-
-.overlay-content {
-  padding: 14px;
-}
-
-.overlay-subheader {
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.overlay-subtitle {
-  text-align: center;
+.mc-day {
+  padding: 8px 0;
   font-size: 14px;
-  font-weight: 800;
+  border-radius: 8px;
+  cursor: pointer;
 }
+.mc-day.today { color: var(--tg-theme-button-color); font-weight: 700; }
+.mc-day.selected { background: var(--tg-theme-button-color); color: #fff; }
+.mc-day.empty { pointer-events: none; }
 
-.menu {
-  background: var(--tg-theme-secondary-bg-color);
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.menu-item {
-  width: 100%;
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--tg-theme-text-color);
+/* Calendar Page */
+.calendar-view { padding-bottom: 100px; }
+.cal-dots {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 12px;
-  text-align: left;
-}
-
-.menu-item + .menu-item {
-  border-top: 1px solid rgba(127, 127, 127, 0.22);
-  border-top-color: color-mix(in srgb, var(--tg-theme-hint-color) 25%, transparent);
-}
-
-.menu-item:active {
-  opacity: 0.85;
-}
-
-.menu-item.static {
-  cursor: default;
-}
-
-.menu-left {
-  min-width: 0;
-}
-
-.menu-title {
-  font-weight: 750;
-  font-size: 14px;
-}
-
-.menu-sub {
+  justify-content: center;
+  gap: 2px;
   margin-top: 2px;
-  font-size: 12px;
-  color: var(--tg-theme-hint-color);
 }
+.cal-dot { width: 4px; height: 4px; background: var(--tg-theme-button-color); border-radius: 50%; }
 
-.menu-right {
-  color: var(--tg-theme-hint-color);
-  font-size: 18px;
-}
+/* Transitions */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
-/* Bottom sheet should appear above tabbar/overlay layers */
-.sheet-backdrop { z-index: 30; }
-.sheet { z-index: 31; }
 
 

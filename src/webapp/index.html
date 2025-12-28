@@ -1,135 +1,228 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Smart-Tasker</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/style.css" />
-  </head>
-  <body>
-    <div class="app">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <title>Smart-Tasker</title>
+
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Vue 3 (Global Build) -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body>
+  <div id="app" v-cloak>
+    <!-- Screen: Main App -->
+    <div class="app" v-if="!loading">
+
       <!-- Header -->
       <header class="header">
-        <div class="header-title" id="headerTitle">My Tasks</div>
-        <button id="btnSettings" class="icon-btn" type="button" aria-label="Настройки">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.1 7.1 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 1h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.57.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 7.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.39.32.6.22l2.39-.96c.51.4 1.06.71 1.63.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.57-.23 1.12-.54 1.63-.94l2.39.96c.21.1.47.01.6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"
-            />
-          </svg>
+        <div class="header-title">{{ headerTitle }}</div>
+        <button class="icon-btn" @click="openSettings">
+          <i data-lucide="settings"></i>
         </button>
       </header>
 
-      <!-- Scrollable content -->
+      <!-- Content -->
       <main class="content">
+
         <!-- Tab: Tasks -->
-        <section id="viewTasks" class="view">
-          <div id="status" class="status">Загрузка…</div>
-          <div id="tasksList" class="sections"></div>
-        </section>
+        <div v-show="activeTab === 'tasks'">
+          <div v-if="tasks.length === 0" class="status-msg">
+            Задач нет. Отдыхай! 🏝
+          </div>
+
+          <div v-else>
+            <div v-for="group in taskGroups" :key="group.title" class="task-group">
+              <div class="group-title">{{ group.title }}</div>
+              <div v-for="task in group.items" :key="task.id" class="task-item" @click="openSheet(task)">
+                <div class="task-checkbox" :class="{ done: false }" @click.stop="toggleTask(task)">
+                  <i data-lucide="check"></i>
+                </div>
+                <div class="task-content">
+                  <div class="task-text">{{ task.text }}</div>
+                  <div class="task-meta" :class="{ overdue: isOverdue(task) }">
+                    <i data-lucide="clock" style="width:12px; height:12px;"></i>
+                    {{ formatDue(task.due_at) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Tab: Calendar -->
-        <section id="viewCalendar" class="view hidden" aria-hidden="true">
-          <div class="calendar">
-            <div class="calendar-header">
-              <button id="calPrev" class="icon-btn small" type="button" aria-label="Предыдущий месяц">‹</button>
-              <div id="calTitle" class="calendar-title">—</div>
-              <button id="calNext" class="icon-btn small" type="button" aria-label="Следующий месяц">›</button>
+        <div v-show="activeTab === 'calendar'" class="calendar-view">
+          <div class="mini-calendar" style="margin-bottom: 20px;">
+            <div class="mc-header">
+              <button class="icon-btn small" @click="calPrevMonth"><i data-lucide="chevron-left"></i></button>
+              <div class="calendar-title">{{ calendarTitle }}</div>
+              <button class="icon-btn small" @click="calNextMonth"><i data-lucide="chevron-right"></i></button>
             </div>
-            <div class="calendar-weekdays" aria-hidden="true">
-              <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
+            <div class="mc-grid">
+              <div class="mc-day muted" v-for="d in ['Пн','Вт','Ср','Чт','Пт','Сб','Вс']">{{d}}</div>
+              <div v-for="day in calendarDays" :key="day.date" class="mc-day" :class="{ 
+                  empty: !day.day,
+                  today: day.isToday,
+                  selected: day.date === selectedDate
+                }" @click="day.day && selectDate(day.date)">
+                {{ day.day }}
+                <div class="cal-dots" v-if="day.hasTasks">
+                  <div class="cal-dot"></div>
+                </div>
+              </div>
             </div>
-            <div id="calGrid" class="calendar-grid"></div>
           </div>
 
-          <div class="day-panel">
-            <div id="dayTitle" class="day-title">Сегодня</div>
-            <div id="dayTasks" class="list"></div>
+          <div class="group-title">Задачи на {{ formatDate(selectedDate) }}</div>
+          <div v-if="calendarTasks.length === 0" class="status-msg" style="padding: 20px 0;">
+            Нет задач
           </div>
-        </section>
+          <div v-for="task in calendarTasks" :key="task.id" class="task-item" @click="openSheet(task)">
+            <div class="task-checkbox" @click.stop="toggleTask(task)">
+              <i data-lucide="check"></i>
+            </div>
+            <div class="task-content">
+              <div class="task-text">{{ task.text }}</div>
+              <div class="task-meta">{{ formatTime(task.due_at) }}</div>
+            </div>
+          </div>
+        </div>
+
       </main>
 
-      <!-- Bottom tabs -->
-      <nav class="tabbar" role="tablist" aria-label="Навигация">
-        <button class="tab active" id="tabTasks" type="button" role="tab" aria-selected="true" data-tab="tasks">
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path fill="currentColor" d="M7 6h14v2H7V6Zm0 5h14v2H7v-2Zm0 5h14v2H7v-2ZM3 6h2v2H3V6Zm0 5h2v2H3v-2Zm0 5h2v2H3v-2Z"/>
-          </svg>
-          <div class="tab-label">List</div>
+      <!-- Tabbar -->
+      <div class="tabbar">
+        <button class="tab-btn" :class="{ active: activeTab === 'tasks' }" @click="activeTab = 'tasks'">
+          <i data-lucide="list-todo"></i>
+          <span>Задачи</span>
         </button>
-        <button class="tab" id="tabCalendar" type="button" role="tab" aria-selected="false" data-tab="calendar">
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path fill="currentColor" d="M7 2h2v2h6V2h2v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2Zm15 8H2v10h20V10ZM4 8h16V6H4v2Z"/>
-          </svg>
-          <div class="tab-label">Calendar</div>
+        <button class="tab-btn" :class="{ active: activeTab === 'calendar' }" @click="activeTab = 'calendar'">
+          <i data-lucide="calendar"></i>
+          <span>Календарь</span>
         </button>
-      </nav>
-    </div>
-
-    <!-- Bottom sheet (task actions) -->
-    <div id="sheetBackdrop" class="sheet-backdrop hidden" aria-hidden="true"></div>
-    <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-hidden="true">
-      <div class="sheet-handle" aria-hidden="true"></div>
-      <div id="sheetTaskTitle" class="sheet-title"></div>
-      <div class="sheet-actions">
-        <button id="sheetEdit" class="sheet-btn" type="button">Редактировать</button>
-        <button id="sheetReschedule" class="sheet-btn" type="button">Изменить дедлайн</button>
-        <button id="sheetClearDeadline" class="sheet-btn" type="button">Убрать дедлайн</button>
-        <button id="sheetDelete" class="sheet-btn danger" type="button">Удалить</button>
-        <button id="sheetClose" class="sheet-btn secondary" type="button">Закрыть</button>
-      </div>
-    </div>
-
-    <!-- Settings overlay -->
-    <div id="settingsBackdrop" class="overlay-backdrop hidden" aria-hidden="true"></div>
-    <div id="settings" class="overlay hidden" role="dialog" aria-modal="true" aria-hidden="true">
-      <div class="overlay-header">
-        <button id="btnSettingsClose" class="icon-btn" type="button" aria-label="Закрыть">✕</button>
-        <div class="overlay-title" id="settingsTitle">Settings</div>
-        <div style="width: 40px;"></div>
       </div>
 
-      <div id="settingsMain" class="overlay-content">
-        <div class="menu">
-          <button id="btnOpenArchive" class="menu-item" type="button">
-            <div class="menu-left">
-              <div class="menu-title">Archive / Completed Tasks</div>
-              <div class="menu-sub">Выполненные задачи</div>
-            </div>
-            <div class="menu-right">›</div>
+    </div>
+
+    <!-- Loader -->
+    <div class="app-loader" v-else>
+      <div class="spinner"></div>
+    </div>
+
+
+    <!-- Bottom Sheet -->
+    <div class="sheet-backdrop" :class="{ open: sheet.open }" @click="closeSheet"></div>
+
+    <div class="sheet" :class="{ open: sheet.open }">
+      <div class="sheet-handle"></div>
+
+      <!-- Mode: Menu -->
+      <div v-if="sheet.mode === 'menu'">
+        <div class="sheet-title">{{ sheet.task?.text }}</div>
+        <div class="action-list">
+          <button class="action-btn" @click="sheet.mode = 'edit'">
+            <i data-lucide="edit-3"></i> Редактировать текст
           </button>
-
-          <div class="menu-item static">
-            <div class="menu-left">
-              <div class="menu-title">Timezone</div>
-              <div class="menu-sub">Auto (Asia/Almaty)</div>
-            </div>
-          </div>
-
-          <div class="menu-item static">
-            <div class="menu-left">
-              <div class="menu-title">About</div>
-              <div class="menu-sub">Version 1.0</div>
-            </div>
-          </div>
+          <button class="action-btn" @click="initReschedule">
+            <i data-lucide="clock"></i>
+            {{ sheet.task?.due_at ? 'Перенести дедлайн' : 'Установить дедлайн' }}
+          </button>
+          <button class="action-btn danger" @click="sheet.mode = 'delete'">
+            <i data-lucide="trash-2"></i> Удалить задачу
+          </button>
         </div>
       </div>
 
-      <div id="settingsArchive" class="overlay-content hidden" aria-hidden="true">
-        <div class="overlay-subheader">
-          <button id="btnArchiveBack" class="icon-btn" type="button" aria-label="Назад">‹</button>
-          <div class="overlay-subtitle">Archive</div>
-          <div style="width: 40px;"></div>
+      <!-- Mode: Edit Text -->
+      <div v-if="sheet.mode === 'edit'">
+        <div class="sheet-title">Редактирование</div>
+        <div class="form-group">
+          <textarea class="input-field" rows="3" v-model="editForm.text" ref="focusInput"></textarea>
+          <button class="primary-btn" @click="saveText" :disabled="!editForm.text.trim()">
+            Сохранить
+          </button>
         </div>
-        <div id="archiveStatus" class="status">Загрузка…</div>
-        <div id="archiveList" class="list"></div>
+      </div>
+
+      <!-- Mode: Reschedule -->
+      <div v-if="sheet.mode === 'reschedule'">
+        <div class="sheet-title">Дедлайн</div>
+
+        <div class="quick-dates">
+          <button class="chip" @click="setDeadline('today')">Сегодня</button>
+          <button class="chip" @click="setDeadline('tomorrow')">Завтра</button>
+          <button class="chip" @click="setDeadline('next_week')">След. неделя</button>
+          <button class="chip" @click="setDeadline(null)" style="color: var(--tg-theme-destructive-text-color)">
+            Убрать
+          </button>
+        </div>
+
+        <div class="mini-calendar">
+          <!-- Simple date picker logic reusing calendar state or separate? 
+                For simplicity reusing separate simplified picker or same logic.
+                Let's use a simplified list of days for now or relying on chips + HTML date input as fallback for specific dates -->
+          <input type="datetime-local" class="input-field" v-model="editForm.date" style="text-align: center;" />
+        </div>
+        <button class="primary-btn" @click="saveDeadline">Сохранить</button>
+      </div>
+
+      <!-- Mode: Delete Confirm -->
+      <div v-if="sheet.mode === 'delete'">
+        <div class="sheet-title">Удалить задачу?</div>
+        <div class="status-msg" style="padding: 10px 0 20px;">
+          Это действие нельзя отменить.
+        </div>
+        <div class="action-list">
+          <button class="action-btn danger" @click="deleteTask">
+            <i data-lucide="trash-2"></i> Да, удалить
+          </button>
+          <button class="action-btn" @click="sheet.mode = 'menu'">
+            Отмена
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Settings Overlay -->
+    <div class="overlay" v-if="settingsOpen" style="z-index: 60;">
+      <!-- ... reusing existing settings structure but Vue-ified ... -->
+      <div class="overlay-header">
+        <button class="icon-btn" @click="settingsOpen = false"><i data-lucide="x"></i></button>
+        <div class="overlay-title">Настройки</div>
+        <div style="width: 40px"></div>
+      </div>
+      <div class="overlay-content">
+        <div class="menu">
+          <!-- Simplified Settings for now -->
+          <div class="menu-item">
+            <div class="menu-left">
+              <div class="menu-title">Версия</div>
+              <div class="menu-sub">2.0 (Vue Edition)</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <script src="/main.js"></script>
-  </body>
+  </div>
+
+  <script src="/main.js"></script>
+</body>
+
 </html>
-
-

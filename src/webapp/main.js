@@ -1,661 +1,396 @@
-document.addEventListener("DOMContentLoaded", () => {
-  const FIXED_OFFSET = "+05:00";
-  const FIXED_OFFSET_MINUTES = 5 * 60;
-  const FIXED_OFFSET_MS = FIXED_OFFSET_MINUTES * 60 * 1000;
+const { createApp, ref, computed, reactive, onMounted, watch, nextTick } = Vue;
 
-  // --- DOM ---
-  const statusEl = document.getElementById("status");
-  const tasksListEl = document.getElementById("tasksList");
+const App = {
+  setup() {
+    // --- Config ---
+    const FIXED_OFFSET = "+05:00"; // Hardcoded offset
+    const tg = window.Telegram?.WebApp;
 
-  const headerTitleEl = document.getElementById("headerTitle");
-  const btnSettings = document.getElementById("btnSettings");
+    // --- State ---
+    const loading = ref(true);
+    const tasks = ref([]);
+    const activeTab = ref('tasks'); // 'tasks' | 'calendar'
+    const settingsOpen = ref(false);
 
-  const viewTasks = document.getElementById("viewTasks");
-  const viewCalendar = document.getElementById("viewCalendar");
-  const tabTasks = document.getElementById("tabTasks");
-  const tabCalendar = document.getElementById("tabCalendar");
+    // Calendar State
+    const now = new Date();
+    const calendarYear = ref(now.getFullYear());
+    const calendarMonth = ref(now.getMonth()); // 0-11
+    const selectedDate = ref(getDateKey(now)); // YYYY-MM-DD
 
-  const calPrev = document.getElementById("calPrev");
-  const calNext = document.getElementById("calNext");
-  const calTitle = document.getElementById("calTitle");
-  const calGrid = document.getElementById("calGrid");
-  const dayTitleEl = document.getElementById("dayTitle");
-  const dayTasksEl = document.getElementById("dayTasks");
-
-  const settingsBackdrop = document.getElementById("settingsBackdrop");
-  const settingsEl = document.getElementById("settings");
-  const btnSettingsClose = document.getElementById("btnSettingsClose");
-  const settingsMain = document.getElementById("settingsMain");
-  const settingsArchive = document.getElementById("settingsArchive");
-  const btnOpenArchive = document.getElementById("btnOpenArchive");
-  const btnArchiveBack = document.getElementById("btnArchiveBack");
-  const archiveStatusEl = document.getElementById("archiveStatus");
-  const archiveListEl = document.getElementById("archiveList");
-
-  // Bottom sheet actions for active tasks
-  const sheetBackdrop = document.getElementById("sheetBackdrop");
-  const sheetEl = document.getElementById("sheet");
-  const sheetTaskTitleEl = document.getElementById("sheetTaskTitle");
-  const sheetEditBtn = document.getElementById("sheetEdit");
-  const sheetRescheduleBtn = document.getElementById("sheetReschedule");
-  const sheetClearDeadlineBtn = document.getElementById("sheetClearDeadline");
-  const sheetDeleteBtn = document.getElementById("sheetDelete");
-  const sheetCloseBtn = document.getElementById("sheetClose");
-
-  const tg = window.Telegram?.WebApp;
-
-  function setStatus(msg) {
-    if (!statusEl) return;
-    statusEl.textContent = msg ? String(msg) : "";
-  }
-
-  if (!tg) {
-    setStatus("Telegram WebApp не обнаружен");
-    return;
-  }
-
-  tg.ready();
-  tg.expand?.();
-
-  // --- Auth (initData) ---
-  const INIT_DATA_CACHE_KEY = "tma_init_data_v1";
-
-  function getInitData() {
-    const live = tg.initData || "";
-    if (live) {
-      try {
-        localStorage.setItem(INIT_DATA_CACHE_KEY, live);
-      } catch (_) {}
-      return live;
-    }
-    try {
-      return localStorage.getItem(INIT_DATA_CACHE_KEY) || "";
-    } catch (_) {
-      return "";
-    }
-  }
-
-  async function apiFetch(path, opts = {}) {
-    const initData = getInitData();
-    if (!initData) {
-      throw new Error(
-        "initData пустой. Откройте Mini App через кнопку «Open/Меню» в Telegram хотя бы один раз, затем можно открывать и из клавиатуры."
-      );
-    }
-    const headers = Object.assign({}, opts.headers || {}, {
-      Authorization: "tma " + initData,
+    // Bottom Sheet State
+    const sheet = reactive({
+      open: false,
+      mode: 'menu', // 'menu' | 'edit' | 'reschedule' | 'delete'
+      task: null
     });
-    if (opts.body && !headers["Content-Type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-    const res = await fetch(path, Object.assign({}, opts, { headers }));
-    if (!res.ok) {
-      let detail = "";
-      try {
-        const data = await res.json();
-        detail = data && data.detail ? String(data.detail) : JSON.stringify(data);
-      } catch (_) {
-        detail = await res.text();
-      }
-      if (res.status === 401) {
-        try {
-          localStorage.removeItem(INIT_DATA_CACHE_KEY);
-        } catch (_) {}
-      }
-      throw new Error(`API error ${res.status}: ${detail}`);
-    }
-    if (res.status === 204) return null;
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) return await res.json();
-    return await res.text();
-  }
 
-  // --- Helpers ---
-  function pad2(n) {
-    return String(n).padStart(2, "0");
-  }
-
-  function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function fmtDue(iso) {
-    if (!iso) return "—";
-    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    if (!m) return String(iso);
-    const [, , mm, dd, hh, mi] = m;
-    return `${dd}.${mm} ${hh}:${mi}`;
-  }
-
-  function safeParseIsoToMs(iso) {
-    if (!iso) return null;
-    const ms = Date.parse(String(iso));
-    return Number.isFinite(ms) ? ms : null;
-  }
-
-  function dateKeyInFixedOffset(ms) {
-    const d = new Date(ms + FIXED_OFFSET_MS);
-    return d.toISOString().slice(0, 10); // YYYY-MM-DD
-  }
-
-  function weekdayMon0InFixedOffset(ms) {
-    const dowSun0 = new Date(ms + FIXED_OFFSET_MS).getUTCDay(); // 0=Sun..6=Sat
-    return (dowSun0 + 6) % 7; // 0=Mon..6=Sun
-  }
-
-  function dateKeyToMs(key) {
-    const ms = Date.parse(`${key}T00:00:00${FIXED_OFFSET}`);
-    return Number.isFinite(ms) ? ms : null;
-  }
-
-  function parseDeadlineInput(s) {
-    const raw = (s || "").trim();
-    if (raw === "") return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(raw)) {
-      return raw.replace(" ", "T") + ":00" + FIXED_OFFSET;
-    }
-    return raw;
-  }
-
-  // --- State ---
-  let currentTab = "tasks"; // tasks | calendar
-  let tasksCache = [];
-  let tasksByDateKey = new Map(); // YYYY-MM-DD -> tasks[]
-
-  const todayKey = dateKeyInFixedOffset(Date.now());
-  let selectedDateKey = todayKey;
-
-  const nowFixed = new Date(Date.now() + FIXED_OFFSET_MS);
-  let calendarYear = nowFixed.getUTCFullYear();
-  let calendarMonthIndex = nowFixed.getUTCMonth(); // 0..11
-
-  // --- Bottom sheet (Task actions) ---
-  let activeTask = null;
-
-  function closeSheet() {
-    if (sheetBackdrop) {
-      sheetBackdrop.classList.add("hidden");
-      sheetBackdrop.setAttribute("aria-hidden", "true");
-    }
-    if (sheetEl) {
-      sheetEl.classList.add("hidden");
-      sheetEl.setAttribute("aria-hidden", "true");
-    }
-    activeTask = null;
-  }
-
-  function openSheet(task) {
-    activeTask = task;
-    if (sheetTaskTitleEl) sheetTaskTitleEl.textContent = task && task.text ? String(task.text) : "Задача";
-    if (sheetBackdrop) {
-      sheetBackdrop.classList.remove("hidden");
-      sheetBackdrop.setAttribute("aria-hidden", "false");
-    }
-    if (sheetEl) {
-      sheetEl.classList.remove("hidden");
-      sheetEl.setAttribute("aria-hidden", "false");
-    }
-  }
-
-  // --- Settings overlay ---
-  function openSettings() {
-    closeSheet();
-    settingsMain?.classList.remove("hidden");
-    settingsMain?.setAttribute("aria-hidden", "false");
-    settingsArchive?.classList.add("hidden");
-    settingsArchive?.setAttribute("aria-hidden", "true");
-
-    settingsBackdrop?.classList.remove("hidden");
-    settingsBackdrop?.setAttribute("aria-hidden", "false");
-    settingsEl?.classList.remove("hidden");
-    settingsEl?.setAttribute("aria-hidden", "false");
-  }
-
-  function closeSettings() {
-    settingsBackdrop?.classList.add("hidden");
-    settingsBackdrop?.setAttribute("aria-hidden", "true");
-    settingsEl?.classList.add("hidden");
-    settingsEl?.setAttribute("aria-hidden", "true");
-  }
-
-  async function loadArchive() {
-    if (archiveStatusEl) archiveStatusEl.textContent = "Загрузка…";
-    if (archiveListEl) archiveListEl.innerHTML = "";
-    const items = await apiFetch("/api/tasks/archive?limit=50", { method: "GET" });
-    const arr = Array.isArray(items) ? items : [];
-    if (!arr.length) {
-      if (archiveStatusEl) archiveStatusEl.textContent = "Архив пуст 🙂";
-      return;
-    }
-    if (archiveStatusEl) archiveStatusEl.textContent = "";
-
-    for (const t of arr) {
-      const row = document.createElement("div");
-      row.className = "task-row";
-      row.style.cursor = "default";
-
-      const check = document.createElement("div");
-      check.className = "check is-checked";
-      check.innerHTML = '<span class="checkmark">✓</span>';
-
-      const main = document.createElement("div");
-      main.className = "task-main";
-
-      const title = document.createElement("div");
-      title.className = "task-text";
-      title.textContent = t.text || "";
-
-      const meta = document.createElement("div");
-      meta.className = "task-meta";
-      const parts = [];
-      if (t.completed_at) parts.push(`Выполнено: ${fmtDue(t.completed_at)}`);
-      if (t.due_at) parts.push(`Дедлайн: ${fmtDue(t.due_at)}`);
-      meta.textContent = parts.length ? parts.join(" · ") : "Выполнено";
-
-      main.appendChild(title);
-      main.appendChild(meta);
-      row.appendChild(check);
-      row.appendChild(main);
-      archiveListEl?.appendChild(row);
-    }
-  }
-
-  function openArchiveView() {
-    settingsMain?.classList.add("hidden");
-    settingsMain?.setAttribute("aria-hidden", "true");
-    settingsArchive?.classList.remove("hidden");
-    settingsArchive?.setAttribute("aria-hidden", "false");
-    loadArchive().catch((e) => {
-      const msg = String(e && e.message ? e.message : e);
-      if (archiveStatusEl) archiveStatusEl.textContent = msg;
-      try {
-        tg.showAlert?.(msg);
-      } catch (_) {}
+    const editForm = reactive({
+      text: '',
+      date: '' // YYYY-MM-DDTHH:mm
     });
-  }
 
-  function closeArchiveView() {
-    settingsArchive?.classList.add("hidden");
-    settingsArchive?.setAttribute("aria-hidden", "true");
-    settingsMain?.classList.remove("hidden");
-    settingsMain?.setAttribute("aria-hidden", "false");
-  }
-
-  // --- UI builders ---
-  function buildSection(title, rows) {
-    if (!rows.length) return null;
-    const section = document.createElement("div");
-    const h = document.createElement("div");
-    h.className = "section-title";
-    h.textContent = title;
-    const list = document.createElement("div");
-    list.className = "list";
-    for (const r of rows) list.appendChild(r);
-    section.appendChild(h);
-    section.appendChild(list);
-    return section;
-  }
-
-  function makeTaskRow(t, { isOverdue } = {}) {
-    const row = document.createElement("div");
-    row.className = "task-row";
-
-    const check = document.createElement("button");
-    check.type = "button";
-    check.className = "check";
-    check.setAttribute("aria-label", "Отметить выполненной");
-    check.innerHTML = '<span class="checkmark">✓</span>';
-    check.onclick = async (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-
-      check.classList.add("is-checked");
-      row.classList.add("is-removing");
-      await wait(160);
-
-      try {
-        await apiFetch(`/api/tasks/${t.id}/complete`, { method: "POST" });
-        await loadTasks();
-      } catch (e) {
-        check.classList.remove("is-checked");
-        row.classList.remove("is-removing");
-        const msg = String(e && e.message ? e.message : e);
-        setStatus(msg);
-        try {
-          tg.showAlert?.(msg);
-        } catch (_) {}
+    // --- Telegram Integration ---
+    onMounted(() => {
+      if (tg) {
+        tg.ready();
+        tg.expand?.();
+        // Setup Back Button
+        tg.BackButton.onClick(() => {
+          if (sheet.open) {
+            closeSheet();
+          } else if (settingsOpen.value) {
+            settingsOpen.value = false;
+          }
+        });
       }
-    };
+      loadTasks();
 
-    const main = document.createElement("div");
-    main.className = "task-main";
+      // Init Lucide icons
+      nextTick(() => lucide.createIcons());
+    });
 
-    const title = document.createElement("div");
-    title.className = "task-text";
-    title.textContent = t.text || "";
-
-    const meta = document.createElement("div");
-    meta.className = "task-meta";
-    if (isOverdue) meta.classList.add("overdue");
-    meta.textContent = t.due_at ? fmtDue(t.due_at) : "Без дедлайна";
-
-    main.appendChild(title);
-    main.appendChild(meta);
-
-    const menu = document.createElement("button");
-    menu.type = "button";
-    menu.className = "menu-btn";
-    menu.setAttribute("aria-label", "Действия");
-    menu.textContent = "⋮";
-    menu.onclick = (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      openSheet(t);
-    };
-
-    row.onclick = () => openSheet(t);
-
-    row.appendChild(check);
-    row.appendChild(main);
-    row.appendChild(menu);
-    return row;
-  }
-
-  function renderTasksTab(items) {
-    if (!tasksListEl) return;
-    tasksListEl.innerHTML = "";
-
-    const nowMs = Date.now();
-    const todayKey2 = dateKeyInFixedOffset(nowMs);
-
-    const overdue = [];
-    const today = [];
-    const upcoming = [];
-
-    for (const t of items || []) {
-      const dueMs = safeParseIsoToMs(t.due_at);
-      const hasDue = dueMs != null;
-      const isOverdue = hasDue && dueMs < nowMs;
-      const isToday = hasDue && dateKeyInFixedOffset(dueMs) === todayKey2 && !isOverdue;
-
-      const row = makeTaskRow(t, { isOverdue });
-      if (isOverdue) overdue.push(row);
-      else if (isToday) today.push(row);
-      else upcoming.push(row);
-    }
-
-    const blocks = [
-      buildSection("🚨 Просрочено", overdue),
-      buildSection("📅 Сегодня", today),
-      buildSection("🔜 Скоро", upcoming),
-    ].filter(Boolean);
-
-    if (!blocks.length) {
-      setStatus("Активных задач нет.");
-      return;
-    }
-
-    for (const b of blocks) tasksListEl.appendChild(b);
-  }
-
-  function rebuildTasksByDate(items) {
-    const m = new Map();
-    for (const t of items || []) {
-      const dueMs = safeParseIsoToMs(t.due_at);
-      if (dueMs == null) continue;
-      const key = dateKeyInFixedOffset(dueMs);
-      const arr = m.get(key) || [];
-      arr.push(t);
-      m.set(key, arr);
-    }
-    for (const [k, arr] of m.entries()) {
-      arr.sort((a, b) => {
-        const am = safeParseIsoToMs(a.due_at) ?? 0;
-        const bm = safeParseIsoToMs(b.due_at) ?? 0;
-        return am - bm;
-      });
-      m.set(k, arr);
-    }
-    tasksByDateKey = m;
-  }
-
-  function monthTitleRu(year, monthIndex) {
-    const months = [
-      "Январь",
-      "Февраль",
-      "Март",
-      "Апрель",
-      "Май",
-      "Июнь",
-      "Июль",
-      "Август",
-      "Сентябрь",
-      "Октябрь",
-      "Ноябрь",
-      "Декабрь",
-    ];
-    return `${months[monthIndex]} ${year}`;
-  }
-
-  function renderSelectedDayTasks() {
-    if (!dayTasksEl) return;
-    dayTasksEl.innerHTML = "";
-
-    const list = tasksByDateKey.get(selectedDateKey) || [];
-
-    if (dayTitleEl) {
-      if (selectedDateKey === todayKey) {
-        dayTitleEl.textContent = "Сегодня";
+    // Update BackButton visibility based on state
+    watch([() => sheet.open, settingsOpen], ([sOpen, setOpen]) => {
+      if (!tg) return;
+      if (sOpen || setOpen) {
+        tg.BackButton.show();
       } else {
-        const [y, m, d] = selectedDateKey.split("-").map((x) => parseInt(x, 10));
-        dayTitleEl.textContent = `${pad2(d)}.${pad2(m)}.${y}`;
+        tg.BackButton.hide();
       }
-    }
+    });
 
-    if (!list.length) {
-      const empty = document.createElement("div");
-      empty.className = "task-row";
-      empty.style.cursor = "default";
-      empty.innerHTML =
-        '<div class="task-main"><div class="task-text">Задач нет</div><div class="task-meta">На выбранную дату нет задач с дедлайном</div></div>';
-      dayTasksEl.appendChild(empty);
-      return;
-    }
+    // Re-render icons when tab or sheet changes
+    watch([activeTab, () => sheet.mode, () => sheet.open], () => {
+      nextTick(() => lucide.createIcons());
+    });
 
-    const nowMs = Date.now();
-    for (const t of list) {
-      const dueMs = safeParseIsoToMs(t.due_at);
-      const isOverdue = dueMs != null && dueMs < nowMs;
-      dayTasksEl.appendChild(makeTaskRow(t, { isOverdue }));
-    }
-  }
 
-  function renderCalendar() {
-    if (!calGrid) return;
-    calGrid.innerHTML = "";
-    if (calTitle) calTitle.textContent = monthTitleRu(calendarYear, calendarMonthIndex);
+    // --- Computed ---
+    const headerTitle = computed(() => {
+      return activeTab.value === 'tasks' ? 'My Tasks' : 'Календарь';
+    });
 
-    const firstKey = `${calendarYear}-${pad2(calendarMonthIndex + 1)}-01`;
-    const firstMs = dateKeyToMs(firstKey) ?? Date.now();
-    const leading = weekdayMon0InFixedOffset(firstMs);
-    const daysInMonth = new Date(Date.UTC(calendarYear, calendarMonthIndex + 1, 0)).getUTCDate();
+    // Group tasks for List View
+    const taskGroups = computed(() => {
+      const nowMs = Date.now();
+      const todayKey = getDateKey(new Date());
 
-    for (let i = 0; i < leading; i++) {
-      const spacer = document.createElement("div");
-      spacer.className = "day muted";
-      spacer.style.visibility = "hidden";
-      calGrid.appendChild(spacer);
-    }
+      const overdue = [];
+      const today = [];
+      const upcoming = [];
 
-    for (let day = 1; day <= daysInMonth; day++) {
-      const key = `${calendarYear}-${pad2(calendarMonthIndex + 1)}-${pad2(day)}`;
-      const cell = document.createElement("div");
-      cell.className = "day";
-      cell.textContent = String(day);
+      tasks.value.forEach(t => {
+        if (t.completed_at) return; // Skip completed in main list
 
-      if (key === selectedDateKey) cell.classList.add("selected");
-      if (key === todayKey) cell.style.color = "var(--tg-theme-button-color)";
+        const dueMs = t.due_at ? Date.parse(t.due_at) : null;
 
-      const hasTasks = (tasksByDateKey.get(key) || []).length > 0;
-      if (hasTasks) {
-        const dot = document.createElement("div");
-        dot.className = "dot";
-        cell.appendChild(dot);
-      }
-
-      cell.addEventListener("click", () => {
-        selectedDateKey = key;
-        renderCalendar();
-        renderSelectedDayTasks();
+        if (dueMs && dueMs < nowMs) {
+          overdue.push(t);
+        } else if (dueMs && getDateKey(new Date(dueMs)) === todayKey) {
+          today.push(t);
+        } else {
+          upcoming.push(t);
+        }
       });
 
-      calGrid.appendChild(cell);
-    }
-  }
+      const groups = [];
+      if (overdue.length) groups.push({ title: '🚨 Просрочено', items: overdue });
+      if (today.length) groups.push({ title: '📅 Сегодня', items: today });
+      if (upcoming.length) groups.push({ title: '🔜 Скоро / Без срока', items: upcoming });
 
-  function setTab(tab) {
-    currentTab = tab;
-
-    tabTasks?.classList.toggle("active", tab === "tasks");
-    tabTasks?.setAttribute("aria-selected", tab === "tasks" ? "true" : "false");
-    tabCalendar?.classList.toggle("active", tab === "calendar");
-    tabCalendar?.setAttribute("aria-selected", tab === "calendar" ? "true" : "false");
-
-    viewTasks?.classList.toggle("hidden", tab !== "tasks");
-    viewTasks?.setAttribute("aria-hidden", tab === "tasks" ? "false" : "true");
-    viewCalendar?.classList.toggle("hidden", tab !== "calendar");
-    viewCalendar?.setAttribute("aria-hidden", tab === "calendar" ? "false" : "true");
-
-    // По требованиям можно оставлять title статичным
-    if (headerTitleEl) headerTitleEl.textContent = "My Tasks";
-
-    if (tab === "tasks") renderTasksTab(tasksCache);
-    else {
-      renderCalendar();
-      renderSelectedDayTasks();
-    }
-  }
-
-  // --- Data loading ---
-  async function loadTasks() {
-    setStatus("Загрузка задач…");
-    const items = await apiFetch("/api/tasks", { method: "GET" });
-    tasksCache = Array.isArray(items) ? items : [];
-    rebuildTasksByDate(tasksCache);
-
-    renderTasksTab(tasksCache);
-    setStatus(tasksCache.length ? "" : "Активных задач нет.");
-
-    // обновляем календарь и список выбранного дня всегда
-    renderCalendar();
-    renderSelectedDayTasks();
-  }
-
-  // --- Wiring ---
-  // Bottom sheet
-  sheetBackdrop?.addEventListener("click", closeSheet);
-  sheetCloseBtn?.addEventListener("click", closeSheet);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      closeSheet();
-      closeSettings();
-    }
-  });
-
-  sheetEditBtn?.addEventListener("click", async () => {
-    if (!activeTask) return;
-    const task = activeTask;
-    const taskId = task.id;
-    const nt = prompt("Новый текст задачи:", task.text || "");
-    if (nt == null) return;
-    const trimmed = String(nt).trim();
-    if (!trimmed) return;
-    closeSheet();
-    await apiFetch(`/api/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify({ text: trimmed }) });
-    await loadTasks();
-  });
-
-  sheetRescheduleBtn?.addEventListener("click", async () => {
-    if (!activeTask) return;
-    const task = activeTask;
-    const taskId = task.id;
-    const nd = prompt(
-      "Новый дедлайн:\n- пусто = снять дедлайн\n- YYYY-MM-DD\n- YYYY-MM-DD HH:MM",
-      task.due_at ? String(task.due_at) : ""
-    );
-    if (nd == null) return;
-    const parsed = parseDeadlineInput(nd);
-    closeSheet();
-    await apiFetch(`/api/tasks/${taskId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ deadline_iso: parsed }),
+      return groups;
     });
-    await loadTasks();
-  });
 
-  sheetClearDeadlineBtn?.addEventListener("click", async () => {
-    if (!activeTask) return;
-    const taskId = activeTask.id;
-    closeSheet();
-    await apiFetch(`/api/tasks/${taskId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ deadline_iso: null }),
+    // Calendar Grid Logic
+    const calendarTitle = computed(() => {
+      const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      return `${months[calendarMonth.value]} ${calendarYear.value}`;
     });
-    await loadTasks();
-  });
 
-  sheetDeleteBtn?.addEventListener("click", async () => {
-    if (!activeTask) return;
-    if (!confirm("Удалить задачу?")) return;
-    const taskId = activeTask.id;
-    closeSheet();
-    await apiFetch(`/api/tasks/${taskId}`, { method: "DELETE" });
-    await loadTasks();
-  });
+    const calendarDays = computed(() => {
+      const year = calendarYear.value;
+      const month = calendarMonth.value;
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
 
-  // Tabs
-  tabTasks?.addEventListener("click", () => setTab("tasks"));
-  tabCalendar?.addEventListener("click", () => setTab("calendar"));
+      // Shift to Mon=0 ... Sun=6
+      const startOffset = (firstDay + 6) % 7;
 
-  // Calendar
-  calPrev?.addEventListener("click", () => {
-    calendarMonthIndex -= 1;
-    if (calendarMonthIndex < 0) {
-      calendarMonthIndex = 11;
-      calendarYear -= 1;
-    }
-    renderCalendar();
-  });
-  calNext?.addEventListener("click", () => {
-    calendarMonthIndex += 1;
-    if (calendarMonthIndex > 11) {
-      calendarMonthIndex = 0;
-      calendarYear += 1;
-    }
-    renderCalendar();
-  });
+      const res = [];
+      // Empty slots
+      for (let i = 0; i < startOffset; i++) res.push({ day: null });
 
-  // Settings
-  btnSettings?.addEventListener("click", openSettings);
-  settingsBackdrop?.addEventListener("click", closeSettings);
-  btnSettingsClose?.addEventListener("click", closeSettings);
-  btnOpenArchive?.addEventListener("click", openArchiveView);
-  btnArchiveBack?.addEventListener("click", closeArchiveView);
+      // Days
+      const todayKey = getDateKey(new Date());
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        // Check tasks
+        const hasTasks = tasks.value.some(t => {
+          if (t.completed_at || !t.due_at) return false;
+          return t.due_at.startsWith(dateKey);
+        });
 
-  // Init
-  (async () => {
-    try {
-      setTab("tasks");
-      await loadTasks();
-    } catch (e) {
-      const msg = String(e && e.message ? e.message : e);
-      setStatus(msg);
+        res.push({
+          day: d,
+          date: dateKey,
+          isToday: dateKey === todayKey,
+          hasTasks
+        });
+      }
+      return res;
+    });
+
+    const calendarTasks = computed(() => {
+      return tasks.value.filter(t => {
+        if (t.completed_at) return false;
+        if (!t.due_at) return false;
+        return t.due_at.startsWith(selectedDate.value);
+      });
+    });
+
+
+    // --- Actions ---
+
+    // API Wrapper
+    async function apiFetch(path, opts = {}) {
+      const initData = tg?.initData || localStorage.getItem('tma_init_data_v1') || '';
+
+      // Cache initData if valid
+      if (tg?.initData) localStorage.setItem('tma_init_data_v1', tg.initData);
+
+      if (!initData) {
+        console.warn("No initData found");
+        // For testing locally without Telegram, you might want to mock this or allow bypass
+      }
+
+      const headers = { ...opts.headers, Authorization: `tma ${initData}` };
+      if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
       try {
-        tg.showAlert?.(msg);
-      } catch (_) {}
+        const res = await fetch(path, { ...opts, headers });
+        if (!res.ok) throw new Error(`API Error ${res.status}`);
+        if (res.status === 204) return null;
+        return await res.json();
+      } catch (e) {
+        if (tg?.showAlert) tg.showAlert(e.message);
+        else alert(e.message);
+        throw e;
+      }
     }
-  })();
-});
+
+    async function loadTasks() {
+      try {
+        loading.value = true;
+        tasks.value = await apiFetch('/api/tasks');
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loading.value = false;
+        nextTick(() => lucide.createIcons());
+      }
+    }
+
+    async function toggleTask(task) {
+      // Optimistic update
+      const originalCompleted = task.completed_at;
+      task.completed_at = originalCompleted ? null : new Date().toISOString();
+
+      // Remove from list immediately (visual feedback)
+      // Actually, let's keep it but formatted as done? 
+      // Current logic: filter out completed tasks from main list.
+      // So it will disappear. 
+
+      try {
+        await apiFetch(`/api/tasks/${task.id}/complete`, { method: 'POST' });
+        await loadTasks(); // Reload to sync
+      } catch (e) {
+        task.completed_at = originalCompleted; // Revert
+      }
+    }
+
+    // --- Bottom Sheet Logic ---
+
+    function openSheet(task) {
+      sheet.task = task;
+      sheet.mode = 'menu';
+      sheet.open = true;
+
+      // Init form
+      editForm.text = task.text;
+      editForm.date = task.due_at ? task.due_at.slice(0, 16) : ''; // YYYY-MM-DDTHH:mm
+    }
+
+    function closeSheet() {
+      sheet.open = false;
+      setTimeout(() => {
+        sheet.mode = 'menu';
+        sheet.task = null;
+      }, 300); // Wait for transition
+    }
+
+    async function saveText() {
+      if (!sheet.task) return;
+      await apiFetch(`/api/tasks/${sheet.task.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ text: editForm.text })
+      });
+      closeSheet();
+      loadTasks();
+    }
+
+    function initReschedule() {
+      sheet.mode = 'reschedule';
+      if (!editForm.date && sheet.task?.due_at) {
+        editForm.date = sheet.task.due_at.slice(0, 16);
+      }
+    }
+
+    async function setDeadline(type) {
+      if (!sheet.task) return;
+      let iso = null;
+      const now = new Date();
+
+      // Simple offset helpers
+      if (type === 'today') {
+        // preserve time or set to end of day? 
+        // Let's set end of day for convenience? Or just date?
+        // Backend expects ISO. Let's just send YYYY-MM-DDT23:59:59+05:00 ideally
+        // But here we use a simple approach:
+        // Actually, let's just pick the date part and keep time?
+        // No, "Today" implies TODAY.
+        iso = getDateKey(now) + 'T23:59:00' + FIXED_OFFSET;
+      } else if (type === 'tomorrow') {
+        const d = new Date(now);
+        d.setDate(d.getDate() + 1);
+        iso = getDateKey(d) + 'T23:59:00' + FIXED_OFFSET;
+      } else if (type === 'next_week') {
+        // Next Monday
+        const d = new Date(now);
+        d.setDate(d.getDate() + (1 + 7 - d.getDay()) % 7 || 7);
+        iso = getDateKey(d) + 'T09:00:00' + FIXED_OFFSET;
+      } else {
+        iso = null; // Clear
+      }
+
+      await apiFetch(`/api/tasks/${sheet.task.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ deadline_iso: iso })
+      });
+      closeSheet();
+      loadTasks();
+    }
+
+    async function saveDeadline() {
+      if (!sheet.task) return;
+      // editForm.date is YYYY-MM-DDTHH:mm from input
+      let iso = null;
+      if (editForm.date) {
+        iso = editForm.date + ':00' + FIXED_OFFSET;
+      }
+      await apiFetch(`/api/tasks/${sheet.task.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ deadline_iso: iso })
+      });
+      closeSheet();
+      loadTasks();
+    }
+
+    async function deleteTask() {
+      if (!sheet.task) return;
+      await apiFetch(`/api/tasks/${sheet.task.id}`, { method: 'DELETE' });
+      closeSheet();
+      loadTasks();
+    }
+
+
+    // --- Helpers ---
+    function getDateKey(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function formatDue(iso) {
+      if (!iso) return '';
+      const date = new Date(iso);
+      if (isNaN(date)) return iso;
+
+      // Simple format: DD.MM HH:mm
+      const day = String(date.getDate()).padStart(2, '0');
+      const mo = String(date.getMonth() + 1).padStart(2, '0');
+      const h = String(date.getHours()).padStart(2, '0');
+      const m = String(date.getMinutes()).padStart(2, '0');
+      return `${day}.${mo} ${h}:${m}`;
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '';
+      const [y, m, d] = dateStr.split('-');
+      return `${d}.${m}.${y}`;
+    }
+
+    function formatTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      return `${h}:${m}`;
+    }
+
+    function isOverdue(task) {
+      if (!task.due_at) return false;
+      return new Date(task.due_at) < new Date();
+    }
+
+    // Settings
+    function openSettings() {
+      settingsOpen.value = true;
+    }
+
+    // Calendar Nav
+    function calPrevMonth() {
+      if (calendarMonth.value === 0) {
+        calendarMonth.value = 11;
+        calendarYear.value--;
+      } else {
+        calendarMonth.value--;
+      }
+    }
+    function calNextMonth() {
+      if (calendarMonth.value === 11) {
+        calendarMonth.value = 0;
+        calendarYear.value++;
+      } else {
+        calendarMonth.value++;
+      }
+    }
+    function selectDate(dateKey) {
+      selectedDate.value = dateKey;
+    }
+
+
+    return {
+      // Logic
+      loading, tasks, activeTab, settingsOpen,
+      sheet, editForm,
+      // Computed
+      headerTitle, taskGroups,
+      calendarTitle, calendarDays, calendarTasks, selectedDate,
+      // Methods
+      openSheet, closeSheet, toggleTask,
+      saveText, saveDeadline, deleteTask,
+      initReschedule, setDeadline,
+      openSettings,
+      calPrevMonth, calNextMonth, selectDate,
+      // Formatters
+      formatDue, formatDate, formatTime, isOverdue
+    };
+  }
+};
+
+createApp(App).mount('#app');
+
 
 
