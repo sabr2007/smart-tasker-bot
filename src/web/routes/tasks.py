@@ -145,6 +145,9 @@ async def complete_task(task_id: int, user=Depends(get_current_user)) -> Dict[st
     return {"ok": True}
 
 
+
+
+
 @router.delete("/{task_id}")
 async def delete_task(task_id: int, user=Depends(get_current_user)) -> Dict[str, Any]:
     user_id = int(user["user_id"])
@@ -158,11 +161,4 @@ async def delete_task(task_id: int, user=Depends(get_current_user)) -> Dict[str,
     return {"ok": True}
 
 
-@router.delete("/archive")
-async def clear_archive(user=Depends(get_current_user)) -> Dict[str, Any]:
-    """
-    Очищает архив выполненных задач.
-    """
-    user_id = int(user["user_id"])
-    await db.clear_archived_tasks(user_id)
-    return {"ok": True}
+
