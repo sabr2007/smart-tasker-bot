@@ -200,6 +200,51 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 
+def _reminder_compact_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    """Компактная клавиатура: только кнопка изменения."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔔 Изменить", callback_data=f"remind_expand:{task_id}"),
+            ]
+        ]
+    )
+
+
+def _reminder_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    """Полная клавиатура выбора времени."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("В дедлайн", callback_data=f"remind_set:{task_id}:0"),
+                InlineKeyboardButton("За 15 мин", callback_data=f"remind_set:{task_id}:15"),
+            ],
+            [
+                InlineKeyboardButton("За 1 час", callback_data=f"remind_set:{task_id}:60"),
+                InlineKeyboardButton("За 3 часа", callback_data=f"remind_set:{task_id}:180"),
+            ],
+            [
+                InlineKeyboardButton("За 24 часа", callback_data=f"remind_set:{task_id}:1440"),
+                InlineKeyboardButton("Без напоминания", callback_data=f"remind_set:{task_id}:off"),
+            ],
+        ]
+    )
+
+async def on_remind_expand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Разворачивает меню выбора напоминания."""
+    query = update.callback_query
+    await query.answer()
+    
+    # data format: remind_expand:{task_id}
+    parts = query.data.split(":")
+    task_id = int(parts[1])
+    
+    await query.edit_message_reply_markup(
+        reply_markup=_reminder_choice_keyboard(task_id)
+    )
+
+
+
 # Краткая инструкция для пользователя
 INSTRUCTION_TEXT = (
     "Пиши задачи обычным языком — бот сам достанет текст и дедлайн.\n\n"
@@ -1514,23 +1559,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             due_norm = normalize_deadline_iso(ai_result.deadline_iso)
             human_deadline = _format_deadline_human_local(due_norm) or "непонятное время"
 
-            # дефолт: напоминание "в дедлайн" (remind_at = due_at)
+            # SMART DEFAULT: Напоминание за 15 минут до дедлайна
             if due_norm:
+                # 15 минут
+                default_offset = 15
+                remind_at = compute_remind_at_from_offset(due_norm, default_offset)
+                
+                # Сохраняем настройки в БД
+                await db.update_task_reminder_settings(
+                    user_id, 
+                    task_id, 
+                    remind_at_iso=remind_at, 
+                    remind_offset_min=default_offset
+                )
+
                 schedule_task_reminder(
                     context.job_queue,
                     task_id=task_id,
                     task_text=task_text,
                     deadline_iso=due_norm,
                     chat_id=chat_id,
-                    remind_at_iso=due_norm,
+                    remind_at_iso=remind_at,
                 )
 
             context.user_data["pending_reminder_choice"] = {"task_id": task_id}
             await update.message.reply_text(
-                f"Задача «{task_text}» добавлена! Дедлайн установлен на {human_deadline}. "
-                "За сколько вам напомнить о ней?\n\n"
-                "Нажми на кнопку либо отправь точное время текстом (например, «за 30 минут» или «в 08:30»).",
-                reply_markup=_reminder_choice_keyboard(task_id),
+                f"Задача «{task_text}» добавлена! Дедлайн: {human_deadline}.\n"
+                "🔔 Напоминание: за 15 мин.",
+                reply_markup=_reminder_compact_keyboard(task_id),
             )
             return
 
@@ -2194,6 +2250,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_remind_set, pattern=r"^remind_set:\d+:(?:off|0|5|30|60)$"))
     app.add_handler(CallbackQueryHandler(on_snooze_prompt, pattern=r"^snooze_prompt:\d+$"))
     app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
+    app.add_handler(CallbackQueryHandler(on_remind_expand, pattern=r"^remind_expand:\d+$"))
     app.add_handler(CallbackQueryHandler(on_clear_archive, pattern=r"^clear_archive$"))
 
     # команды админа
