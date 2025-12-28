@@ -11,6 +11,12 @@ const App = {
     const tasks = ref([]);
     const activeTab = ref('tasks'); // 'tasks' | 'calendar'
     const settingsOpen = ref(false);
+    const showInstructions = ref(false);
+
+    // Archive State
+    const archiveOpen = ref(false);
+    const archiveTasks = ref([]);
+    const loadingArchive = ref(false);
 
     // Calendar State
     const now = new Date();
@@ -303,6 +309,34 @@ const App = {
       loadTasks();
     }
 
+    // --- Archive Logic ---
+    function openArchive() {
+      archiveOpen.value = true;
+      loadArchive();
+    }
+
+    async function loadArchive() {
+      try {
+        loadingArchive.value = true;
+        archiveTasks.value = await apiFetch('/api/tasks/archive?limit=50');
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loadingArchive.value = false;
+        nextTick(() => lucide.createIcons());
+      }
+    }
+
+    async function clearArchive() {
+      if (!confirm('Очистить весь архив выполненных задач?')) return;
+      try {
+        await apiFetch('/api/tasks/archive', { method: 'DELETE' });
+        archiveTasks.value = [];
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
 
     // --- Helpers ---
     function getDateKey(date) {
@@ -374,7 +408,8 @@ const App = {
     return {
       // Logic
       loading, tasks, activeTab, settingsOpen,
-      sheet, editForm,
+      sheet, editForm, showInstructions,
+      archiveOpen, archiveTasks, loadingArchive,
       // Computed
       headerTitle, taskGroups,
       calendarTitle, calendarDays, calendarTasks, selectedDate,
@@ -382,7 +417,7 @@ const App = {
       openSheet, closeSheet, toggleTask,
       saveText, saveDeadline, deleteTask,
       initReschedule, setDeadline,
-      openSettings,
+      openSettings, openArchive, clearArchive,
       calPrevMonth, calNextMonth, selectDate,
       // Formatters
       formatDue, formatDate, formatTime, isOverdue

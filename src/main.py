@@ -2158,6 +2158,18 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==== MAIN =====
 
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Приветственное сообщение."""
+    text = (
+        "Привет! 👋 Я Smart Tasker, твой личный AI-помощник по делам.\n\n"
+        "Я понимаю обычную человеческую речь (и текст, и голосовые). Мне не нужны сложные команды — просто скажи, что нужно сделать, как будто пишешь ассистенту.\n\n"
+        "🚀 <b>С чего начать?</b> Прежде чем мы начнем, очень советую заглянуть в Инструкцию (в настройках WebApp). Там я показываю, как добавлять 10 задач за одну минуту и управлять ими в одно касание.\n\n"
+        "Жми кнопку ниже! 👇"
+    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_KEYBOARD)
+
+
 def main():
     # Важно для Python 3.11+: python-telegram-bot (20.x) внутри run_polling()
     # использует asyncio.get_event_loop(). Если перед этим вызвать asyncio.run(...),
@@ -2183,6 +2195,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_clear_archive, pattern=r"^clear_archive$"))
 
     # команды админа
+    app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
 

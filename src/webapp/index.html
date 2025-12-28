@@ -209,11 +209,65 @@
       </div>
       <div class="overlay-content">
         <div class="menu">
-          <!-- Simplified Settings for now -->
+          <!-- Instructions -->
+          <div class="menu-item" @click="showInstructions = !showInstructions">
+            <div class="menu-left">
+              <div class="menu-icon"><i data-lucide="book-open"></i></div>
+              <div class="menu-title">Инструкция</div>
+            </div>
+            <div class="menu-right">
+              <i :data-lucide="showInstructions ? 'chevron-up' : 'chevron-down'"></i>
+            </div>
+          </div>
+
+          <div v-if="showInstructions" class="instructions-block">
+            <p>🤖 <b>Как я работаю:</b></p>
+            <p>1. <b>Пиши как думаешь:</b> «Напомни купить хлеб завтра в 18:00»</p>
+            <p>2. <b>Голосовые:</b> Диктуй список дел, я сам всё разберу.</p>
+            <p>3. <b>Управление:</b> Жми на задачу, чтобы изменить, перенести или удалить.</p>
+            <p>4. <b>В чате:</b> «Перенеси встречу на 19:00», «Удали задачу про торт».</p>
+          </div>
+
+          <!-- Archive -->
+          <div class="menu-item" @click="openArchive">
+            <div class="menu-left">
+              <div class="menu-icon"><i data-lucide="archive"></i></div>
+              <div class="menu-title">Архив выполненных</div>
+            </div>
+            <div class="menu-right"><i data-lucide="chevron-right"></i></div>
+          </div>
+
           <div class="menu-item">
             <div class="menu-left">
               <div class="menu-title">Версия</div>
-              <div class="menu-sub">2.0 (Vue Edition)</div>
+              <div class="menu-sub">2.1 (Vue Edition)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Archive Overlay -->
+    <div class="overlay" v-if="archiveOpen" style="z-index: 61;">
+      <div class="overlay-header">
+        <button class="icon-btn" @click="archiveOpen = false"><i data-lucide="arrow-left"></i></button>
+        <div class="overlay-title">Архив</div>
+        <button class="icon-btn danger" @click="clearArchive" v-if="archiveTasks.length > 0">
+          <i data-lucide="trash-2"></i>
+        </button>
+        <div style="width: 40px" v-else></div>
+      </div>
+      <div class="overlay-content">
+        <div v-if="loadingArchive" class="status-msg">Загрузка...</div>
+        <div v-else-if="archiveTasks.length === 0" class="status-msg">Архив пуст</div>
+        <div v-else>
+          <div v-for="task in archiveTasks" :key="task.id" class="task-item" style="opacity: 0.7;">
+            <div class="task-checkbox done">
+              <i data-lucide="check"></i>
+            </div>
+            <div class="task-content">
+              <div class="task-text" style="text-decoration: line-through;">{{ task.text }}</div>
+              <div class="task-meta">Выполнено: {{ formatDue(task.completed_at) }}</div>
             </div>
           </div>
         </div>
