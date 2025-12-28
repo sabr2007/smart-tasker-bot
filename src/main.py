@@ -652,20 +652,7 @@ def cancel_task_reminder(task_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
         job.schedule_removal()
 
 
-def _reminder_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("за 5 минут", callback_data=f"remind_set:{task_id}:5"),
-                InlineKeyboardButton("за 30 минут", callback_data=f"remind_set:{task_id}:30"),
-            ],
-            [
-                InlineKeyboardButton("за 1 час", callback_data=f"remind_set:{task_id}:60"),
-                InlineKeyboardButton("в дедлайн", callback_data=f"remind_set:{task_id}:0"),
-            ],
-            [InlineKeyboardButton("не напоминать", callback_data=f"remind_set:{task_id}:off")],
-        ]
-    )
+
 
 
 def _snooze_keyboard(task_id: int) -> InlineKeyboardMarkup:
