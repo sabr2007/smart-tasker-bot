@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import logging
 from datetime import time as dtime
 
 from telegram.ext import (
@@ -20,6 +21,15 @@ from telegram.ext import (
 import db
 from config import TELEGRAM_BOT_TOKEN
 from time_utils import LOCAL_TZ
+
+# Настройка логирования
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO  # Включаем уровень INFO, чтобы видеть обычные сообщения
+)
+# Отключаем шум от библиотек (по желанию)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 # --- Handlers ---
 from bot.jobs import send_daily_digest, restore_reminders_job

@@ -265,6 +265,7 @@ def parse_user_input_multi(
     )
 
     raw = response.choices[0].message.content
+    logger.info("LLM Raw Multi Response: %s", raw)
     try:
         data: Dict[str, Any] = json.loads(raw)
     except Exception:
@@ -382,6 +383,7 @@ def parse_user_input(
     )
 
     raw = response.choices[0].message.content
+    logger.info("LLM Raw Single Response: %s", raw)
     data: Dict[str, Any] = json.loads(raw)
 
     if "raw_input" not in data or not data["raw_input"]:
