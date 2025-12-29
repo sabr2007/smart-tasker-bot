@@ -130,7 +130,7 @@ def get_parser_system_prompt(now_str: str, user_timezone: str, tz_offset: str, t
 6. ДОБАВИТЬ дедлайн:
    - action = "add_deadline"
    - target_task_hint = по какой задаче
-   - deadline_iso обязателен (в {fixed_tz_offset})
+   - deadline_iso обязателен (в {tz_offset})
 
 7. УБРАТЬ дедлайн:
    - action = "clear_deadline"
