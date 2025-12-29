@@ -19,7 +19,7 @@ import db
 from bot.constants import MASS_CLEAR_HINTS
 from bot.keyboards import MAIN_KEYBOARD
 from bot.services import send_tasks_list
-from bot.utils import filter_tasks_by_date, parse_explicit_date
+from bot.utils import filter_tasks_by_date, parse_explicit_date, format_deadline_human_local
 
 # Import pending handlers
 from bot.handlers.text_pending import (
@@ -51,7 +51,7 @@ from bot.handlers.text_actions import (
 
 from llm_client import parse_user_input
 from task_schema import TaskInterpretation
-from time_utils import now_local, now_in_tz, parse_deadline_iso, format_deadline_human_local
+from time_utils import now_local, now_in_tz, parse_deadline_iso
 
 logger = logging.getLogger(__name__)
 
