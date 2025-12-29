@@ -60,6 +60,11 @@
                     {{ formatDue(task.due_at) }}
                   </div>
                 </div>
+                <!-- Archive Action -->
+                <button v-if="task.completed_at" class="icon-btn"
+                  style="color: var(--tg-theme-hint-color); padding: 4px;" @click.stop="archiveTask(task)">
+                  <i data-lucide="archive" style="width: 18px; height: 18px;"></i>
+                </button>
               </div>
             </div>
           </div>

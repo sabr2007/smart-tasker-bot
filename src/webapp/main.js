@@ -1,4 +1,4 @@
-const { createApp, ref, computed, reactive, onMounted, watch, nextTick } = Vue;
+const { createApp, ref, computed, reactive, onMounted, watch, nextTick, onUpdated } = Vue;
 
 const App = {
   setup() {
@@ -96,6 +96,11 @@ const App = {
     // Re-render icons when tab, sheet, or settings changes
     watch([activeTab, () => sheet.mode, () => sheet.open, settingsOpen, showInstructions, archiveOpen], () => {
       nextTick(() => lucide.createIcons());
+    });
+
+    // Ensure icons render after any DOM update (e.g. moving task to completed)
+    onUpdated(() => {
+      lucide.createIcons();
     });
 
 
@@ -297,18 +302,41 @@ const App = {
     async function toggleTask(task) {
       // Optimistic update
       const originalCompleted = task.completed_at;
-      task.completed_at = originalCompleted ? null : new Date().toISOString();
 
-      // Remove from list immediately (visual feedback)
-      // Actually, let's keep it but formatted as done? 
-      // Current logic: filter out completed tasks from main list.
-      // So it will disappear. 
+      if (originalCompleted) {
+        // Reopen
+        task.completed_at = null;
+        try {
+          await apiFetch(`/api/tasks/${task.id}/reopen`, { method: 'POST' });
+          // await loadTasks(); // Optional: reload to be sure
+        } catch (e) {
+          task.completed_at = originalCompleted;
+        }
+      } else {
+        // Complete
+        task.completed_at = new Date().toISOString();
+        try {
+          await apiFetch(`/api/tasks/${task.id}/complete`, { method: 'POST' });
+          // await loadTasks();
+        } catch (e) {
+          task.completed_at = originalCompleted; // Revert
+        }
+      }
+    }
+
+    async function archiveTask(task) {
+      // Optimistic remove
+      const idx = tasks.value.indexOf(task);
+      if (idx > -1) tasks.value.splice(idx, 1);
 
       try {
-        await apiFetch(`/api/tasks/${task.id}/complete`, { method: 'POST' });
-        await loadTasks(); // Reload to sync
+        await apiFetch(`/api/tasks/${task.id}/archive`, { method: 'POST' });
       } catch (e) {
-        task.completed_at = originalCompleted; // Revert
+        // Revert if failed
+        if (idx > -1) {
+          tasks.value.splice(idx, 0, task);
+        }
+        alert("Не удалось архивировать задачу");
       }
     }
 
@@ -561,7 +589,8 @@ const App = {
       openSheet, closeSheet, toggleTask,
       saveText, saveDeadline, deleteTask,
       initReschedule, setDeadline,
-      openSettings, openArchive, clearArchive,
+      openSettings, openArchive, clearArchive, archiveTask,
+      calPrevMonth, calNextMonth, selectDate,
       calPrevMonth, calNextMonth, selectDate,
       saveTimezone,
       // Formatters

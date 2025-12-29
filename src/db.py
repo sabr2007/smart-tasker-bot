@@ -432,6 +432,44 @@ async def set_task_done(user_id: int, task_id: int):
         await conn.commit()
 
 
+async def set_task_active(user_id: int, task_id: int):
+    """Возвращает задачу в активное состояние (status='active', completed_at=NULL)."""
+    async with get_connection() as conn:
+        task_row = await _fetch_task_row(conn, user_id, task_id)
+
+        await conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'active', completed_at = NULL
+            WHERE id = ? AND user_id = ?
+            """,
+            (task_id, user_id),
+        )
+
+        if task_row:
+            task_row["status"] = "active"
+            await _archive_task_snapshot(conn, task_row, reason="reopened")
+
+        await conn.commit()
+
+
+async def set_task_archived(user_id: int, task_id: int):
+    """Помечает задачу как архивную (status='archived')."""
+    async with get_connection() as conn:
+        task_row = await _fetch_task_row(conn, user_id, task_id)
+
+        await conn.execute(
+            "UPDATE tasks SET status = 'archived' WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        )
+
+        if task_row:
+            task_row["status"] = "archived"
+            await _archive_task_snapshot(conn, task_row, reason="archived")
+
+        await conn.commit()
+
+
 async def get_archived_tasks(
     user_id: int,
     limit: int = 10,
@@ -442,7 +480,7 @@ async def get_archived_tasks(
             """
             SELECT id, text, due_at, completed_at
             FROM tasks
-            WHERE user_id = ? AND status = 'done'
+            WHERE user_id = ? AND status = 'archived'
             ORDER BY completed_at DESC
             LIMIT ?
             """,

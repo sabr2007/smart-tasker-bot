@@ -163,6 +163,28 @@ async def complete_task(task_id: int, user=Depends(get_current_user)) -> Dict[st
     await db.set_task_done(user_id, task_id)
     return {"ok": True}
 
+
+@router.post("/{task_id}/reopen")
+async def reopen_task(task_id: int, user=Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = int(user["user_id"])
+    row = await db.get_task(user_id, task_id)
+    # Note: get_task returns task if it exists, regardless of status usually, 
+    # but we should check if it's there.
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    await db.set_task_active(user_id, task_id)
+    return {"ok": True}
+
+
+@router.post("/{task_id}/archive")
+async def archive_task(task_id: int, user=Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = int(user["user_id"])
+    row = await db.get_task(user_id, task_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    await db.set_task_archived(user_id, task_id)
+    return {"ok": True}
+
 @router.delete("/archive")
 async def clear_archive(user=Depends(get_current_user)) -> Dict[str, Any]:
     """Очищает архив выполненных задач пользователя."""
