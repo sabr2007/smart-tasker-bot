@@ -1,0 +1,144 @@
+# src/bot/jobs.py
+"""Scheduled job functions for the Telegram bot.
+
+Contains: reminders, daily digest, and job restoration logic.
+"""
+
+import logging
+from datetime import timedelta
+
+from telegram.ext import ContextTypes
+
+import db
+from bot.keyboards import snooze_keyboard
+from time_utils import now_local, now_local_iso, parse_deadline_iso
+
+logger = logging.getLogger(__name__)
+
+
+async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Job-функция: отправляет напоминание по задаче.
+    Ожидает в job.data: {"task_id": int, "text": str}
+    """
+    job = context.job
+    if not job:
+        return
+
+    data = job.data or {}
+    task_id = data.get("task_id")
+    text = data.get("text") or "задача"
+    chat_id = job.chat_id
+    try:
+        tid = int(task_id)
+    except Exception:
+        tid = 0
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "⏰ Напоминание:\n\n"
+            f"{text}\n\n"
+            "Если хочешь задачу отложить — нажми на кнопку или отправь точное время текстом "
+            "(например, «через 30 минут» или «в 18:10»)."
+        ),
+        reply_markup=snooze_keyboard(tid) if tid > 0 else None,
+    )
+
+
+async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Ежедневный дайджест: в 07:30 отправляет всем список активных задач.
+    """
+    # Import here to avoid circular import
+    from bot.services import send_tasks_list
+    
+    user_ids = await db.get_users_with_active_tasks()
+    if not user_ids:
+        return
+
+    for uid in user_ids:
+        await send_tasks_list(chat_id=uid, user_id=uid, context=context)
+
+
+def schedule_task_reminder(
+    job_queue,
+    task_id: int,
+    task_text: str,
+    deadline_iso: str | None,
+    chat_id: int,
+    *,
+    remind_at_iso: str | None = None,
+):
+    """
+    Ставит напоминание в job_queue, если дедлайн в будущем и данные валидны.
+    Используется как при создании/переносе задач, так и при восстановлении после рестарта.
+    """
+    when_iso = remind_at_iso or deadline_iso
+    if not job_queue or not when_iso:
+        return
+
+    try:
+        dt = parse_deadline_iso(when_iso)
+        if not dt:
+            return
+    except Exception:
+        return
+
+    now = now_local()
+    if dt <= now:
+        return
+
+    delay = (dt - now).total_seconds()
+    job_queue.run_once(
+        send_task_reminder,
+        when=timedelta(seconds=delay),
+        chat_id=chat_id,
+        name=f"reminder:{task_id}",
+        data={"task_id": task_id, "text": task_text},
+    )
+
+
+def cancel_task_reminder(task_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Удаляет job напоминания по id задачи.
+    Имя job-а: f"reminder:{task_id}".
+    """
+    if not context.job_queue:
+        return
+
+    jobs = context.job_queue.get_jobs_by_name(f"reminder:{task_id}")
+    for job in jobs:
+        job.schedule_removal()
+
+
+async def restore_reminders(job_queue):
+    """
+    После рестарта бота восстанавливает напоминания по активным задачам с будущими дедлайнами.
+    """
+    if not job_queue:
+        return
+
+    now_iso = now_local_iso()
+    tasks = await db.get_active_tasks_with_future_remind(now_iso)
+    for task_id, user_id, text, due_at, remind_at, _offset_min in tasks:
+        schedule_task_reminder(
+            job_queue,
+            task_id,
+            text,
+            deadline_iso=due_at,
+            chat_id=user_id,
+            remind_at_iso=remind_at,
+        )
+
+    # fallback: дедлайн в будущем, но remind_at ещё не задан
+    fallback = await db.get_active_tasks_with_future_due_without_remind(now_iso)
+    for task_id, user_id, text, due_at in fallback:
+        schedule_task_reminder(job_queue, task_id, text, deadline_iso=due_at, chat_id=user_id)
+
+
+async def restore_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Запускается один раз при старте, чтобы восстановить напоминания из БД."""
+    if not context.job_queue:
+        return
+    await restore_reminders(context.job_queue)

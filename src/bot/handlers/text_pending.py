@@ -1,0 +1,292 @@
+# src/bot/handlers/text_pending.py
+"""Handlers for pending user state (deadline clarification, reschedule, snooze)."""
+
+import logging
+from datetime import timedelta
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+import db
+from bot.constants import NO_REMINDER_PHRASES
+from bot.jobs import cancel_task_reminder, schedule_task_reminder
+from bot.keyboards import MAIN_KEYBOARD, reminder_compact_keyboard
+from bot.utils import format_deadline_human_local, is_deadline_like
+from time_utils import (
+    compute_remind_at_from_offset,
+    normalize_deadline_iso,
+    now_local,
+    parse_datetime_from_text,
+    parse_delay_minutes,
+    parse_offset_minutes,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def handle_pending_deadline(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int,
+    text: str,
+) -> bool:
+    """
+    Handles pending deadline clarification for a new task.
+    Returns True if handled (caller should return early), False otherwise.
+    """
+    pending_deadline = context.user_data.get("pending_deadline")
+    if not pending_deadline:
+        return False
+
+    task_id = pending_deadline.get("task_id")
+    task_text = pending_deadline.get("text")
+
+    lower = text.lower()
+    if lower in ["нет", "не надо", "без дедлайна", "отмена"]:
+        context.user_data.pop("pending_deadline", None)
+        await update.message.reply_text(
+            f"Ок, задача «{task_text}» без дедлайна.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return True
+
+    # Try to parse as delay or datetime
+    now = now_local()
+    delay_min = parse_delay_minutes(text)
+    dt = None
+    if delay_min is not None:
+        dt = now + timedelta(minutes=delay_min)
+    else:
+        dt = parse_datetime_from_text(text, now=now, base_date=now.date())
+
+    if dt:
+        new_due = normalize_deadline_iso(dt.isoformat())
+        await db.update_task_due(user_id, task_id, new_due)
+
+        # Set reminder (smart default: 15 min)
+        default_offset = 15
+        remind_at = compute_remind_at_from_offset(new_due, default_offset)
+        await db.update_task_reminder_settings(
+            user_id, task_id, remind_at_iso=remind_at, remind_offset_min=default_offset
+        )
+        schedule_task_reminder(
+            context.job_queue,
+            task_id=task_id,
+            task_text=task_text,
+            deadline_iso=new_due,
+            chat_id=chat_id,
+            remind_at_iso=remind_at,
+        )
+
+        context.user_data.pop("pending_deadline", None)
+        human = format_deadline_human_local(new_due)
+        await update.message.reply_text(
+            f"Отлично! Дедлайн для «{task_text}»: {human}.\n🔔 Напоминание: за 15 мин.",
+            reply_markup=reminder_compact_keyboard(task_id),
+        )
+        return True
+    else:
+        if is_deadline_like(text):
+            await update.message.reply_text(
+                "Не совсем понял время. Напиши, например: «завтра в 18:00», «через 2 часа» или «нет».",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return True
+        else:
+            context.user_data.pop("pending_deadline", None)
+            return False  # Fallthrough to AI parse
+
+
+async def handle_pending_reschedule(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int,
+    text: str,
+) -> bool:
+    """
+    Handles pending reschedule date clarification.
+    Returns True if handled, False otherwise.
+    """
+    pending_reschedule = context.user_data.get("pending_reschedule")
+    if not pending_reschedule:
+        return False
+
+    task_id = pending_reschedule.get("task_id")
+    task_text = pending_reschedule.get("text")
+
+    lower = text.lower()
+    if lower in ["нет", "не надо", "отмена"]:
+        context.user_data.pop("pending_reschedule", None)
+        await update.message.reply_text("Ок, не переносим.", reply_markup=MAIN_KEYBOARD)
+        return True
+
+    now = now_local()
+    delay_min = parse_delay_minutes(text)
+    dt = None
+    if delay_min is not None:
+        dt = now + timedelta(minutes=delay_min)
+    else:
+        dt = parse_datetime_from_text(text, now=now, base_date=now.date())
+
+    if dt:
+        new_due = normalize_deadline_iso(dt.isoformat())
+        cancel_task_reminder(task_id, context)
+        await db.update_task_due(user_id, task_id, new_due)
+
+        # Recalculate reminder
+        _remind_at, offset_min, _due_prev, _txt = await db.get_task_reminder_settings(user_id, task_id)
+        if offset_min is None:
+            new_remind_at = new_due
+        else:
+            new_remind_at = compute_remind_at_from_offset(new_due, offset_min) if new_due else None
+
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
+        schedule_task_reminder(
+            context.job_queue,
+            task_id=task_id,
+            task_text=task_text,
+            deadline_iso=new_due,
+            chat_id=chat_id,
+            remind_at_iso=new_remind_at,
+        )
+
+        context.user_data.pop("pending_reschedule", None)
+        human = format_deadline_human_local(new_due)
+        await update.message.reply_text(
+            f"Перенёс задачу «{task_text}» на {human}.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return True
+    else:
+        if is_deadline_like(text):
+            await update.message.reply_text(
+                "Не понял дату. Напиши, например: «завтра», «в пятницу» или «нет».",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return True
+        else:
+            context.user_data.pop("pending_reschedule", None)
+            return False
+
+
+async def handle_pending_reminder_choice(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int,
+    text: str,
+) -> bool:
+    """
+    Handles pending reminder offset choice via text input.
+    Returns True if handled, False otherwise.
+    """
+    pending_choice = context.user_data.get("pending_reminder_choice")
+    if not pending_choice:
+        return False
+
+    task_id = pending_choice.get("task_id")
+    offset = parse_offset_minutes(text)
+    
+    if offset is not None:
+        _remind_at, _offset_old, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
+        if not due_at:
+            await update.message.reply_text("У задачи нет дедлайна.", reply_markup=MAIN_KEYBOARD)
+            context.user_data.pop("pending_reminder_choice", None)
+            return True
+
+        new_remind_at = compute_remind_at_from_offset(due_at, offset)
+        if new_remind_at:
+            cancel_task_reminder(task_id, context)
+            await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset)
+            schedule_task_reminder(
+                context.job_queue,
+                task_id=task_id,
+                task_text=task_text_db or "задача",
+                deadline_iso=due_at,
+                chat_id=chat_id,
+                remind_at_iso=new_remind_at,
+            )
+            await update.message.reply_text(
+                f"Ок, напомню за {offset} мин.",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            context.user_data.pop("pending_reminder_choice", None)
+            return True
+
+        if is_deadline_like(text):
+            await update.message.reply_text(
+                "Не понял. Выбери кнопку или напиши, например, «за 30 минут» / «за 1 час» / «в 08:30».",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return True
+
+    context.user_data.pop("pending_reminder_choice", None)
+    return False
+
+
+async def handle_pending_snooze(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int,
+    text: str,
+) -> bool:
+    """
+    Handles pending snooze time input.
+    Returns True if handled, False otherwise.
+    """
+    pending_snooze = context.user_data.get("pending_snooze")
+    if not pending_snooze:
+        return False
+
+    task_id = pending_snooze.get("task_id")
+    if not isinstance(task_id, int):
+        return False
+
+    lower = text.lower().strip()
+    if lower in NO_REMINDER_PHRASES:
+        context.user_data.pop("pending_snooze", None)
+        await update.message.reply_text("Ок.", reply_markup=MAIN_KEYBOARD)
+        return True
+
+    now = now_local()
+    delay_min = parse_delay_minutes(text)
+    if delay_min is None:
+        delay_min = parse_offset_minutes(text)
+
+    dt = None
+    if delay_min is not None:
+        dt = now + timedelta(minutes=max(delay_min, 0))
+    else:
+        dt = parse_datetime_from_text(text, now=now, base_date=now.date())
+
+    if not dt or dt <= now:
+        if is_deadline_like(text):
+            await update.message.reply_text(
+                "Не понял. Напиши, например, «через 5 минут», «через 30 минут» или «в 18:10».",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return True
+        context.user_data.pop("pending_snooze", None)
+        return False
+    else:
+        _remind_at, offset_min, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
+        remind_iso = normalize_deadline_iso(dt.isoformat())
+        cancel_task_reminder(task_id, context)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
+        schedule_task_reminder(
+            context.job_queue,
+            task_id=task_id,
+            task_text=task_text_db or "задача",
+            deadline_iso=due_at,
+            chat_id=chat_id,
+            remind_at_iso=remind_iso,
+        )
+        context.user_data.pop("pending_snooze", None)
+        await update.message.reply_text(
+            f"Ок, отложил напоминание до {dt.strftime('%d.%m %H:%M')}.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return True

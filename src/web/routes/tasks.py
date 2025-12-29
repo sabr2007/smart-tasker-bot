@@ -158,7 +158,4 @@ async def delete_task(task_id: int, user=Depends(get_current_user)) -> Dict[str,
     return {"ok": True}
 
 
-    return {"ok": True}
-
-
 

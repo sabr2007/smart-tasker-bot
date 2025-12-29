@@ -7,6 +7,7 @@ from typing import Optional
 
 # ЕДИНАЯ ТАЙМЗОНА ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (фиксированный offset)
 FIXED_TZ = timezone(timedelta(hours=5), name="+05:00")
+LOCAL_TZ = FIXED_TZ  # Alias for backward compatibility
 
 
 def now_local() -> datetime:

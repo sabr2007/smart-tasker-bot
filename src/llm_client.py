@@ -15,10 +15,9 @@ from prompts import (
     get_reply_system_prompt,
 )
 from task_schema import TaskInterpretation
-from time_utils import FIXED_TZ, now_local, normalize_deadline_iso, parse_deadline_iso
+from time_utils import FIXED_TZ, LOCAL_TZ, now_local, normalize_deadline_iso, parse_deadline_iso
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-LOCAL_TZ = FIXED_TZ
 
 
 logger = logging.getLogger(__name__)
