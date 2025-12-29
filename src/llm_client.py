@@ -20,7 +20,6 @@ from time_utils import (
     now_in_tz,
     now_utc,
     normalize_deadline_to_utc,
-    normalize_deadline_iso,  # legacy
     parse_deadline_iso,
     get_tz_offset_str,
     format_deadline_in_tz,
@@ -52,8 +51,11 @@ def _format_tasks_for_prompt(
     for i, (_tid, text, due) in enumerate(tasks_snapshot, start=1):
         if due:
             try:
-                due_norm = normalize_deadline_iso(due) or due
-                dt = datetime.fromisoformat(due_norm)
+                # due is already in UTC format, parse directly
+                s = due.strip()
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                dt = datetime.fromisoformat(s)
                 d_str = dt.strftime("%Y-%m-%d %H:%M")
                 lines.append(f"{i}. {text} (дедлайн: {d_str})")
             except Exception:
@@ -431,13 +433,17 @@ def build_reply_prompt() -> str:
 
 def _format_deadline_human(deadline_iso: Optional[str]) -> Optional[str]:
     """
-    Превращает ISO-дедлайн в строку "дд.мм HH:MM" в локальной таймзоне.
+    Превращает ISO-дедлайн в строку "дд.мм HH:MM".
+    Assumes deadline_iso is in UTC format.
     """
     if not deadline_iso:
         return None
     try:
-        norm = normalize_deadline_iso(deadline_iso) or deadline_iso
-        dt = datetime.fromisoformat(norm)
+        # Parse UTC deadline directly
+        s = deadline_iso.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
         return dt.strftime("%d.%m %H:%M")
     except Exception:
         return None

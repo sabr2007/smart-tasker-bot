@@ -8,7 +8,7 @@ from typing import Optional
 
 import aiosqlite
 
-from time_utils import normalize_deadline_iso, now_local_iso
+from time_utils import now_local_iso
 
 DB_PATH = os.getenv("DB_PATH")
 if not DB_PATH:
@@ -116,27 +116,7 @@ async def init_db():
         if "remind_offset_min" not in columns:
             await conn.execute("ALTER TABLE tasks ADD COLUMN remind_offset_min INTEGER")
 
-        # --- Нормализация TZ в уже сохранённых данных (фиксируем +05:00, убираем +06:00) ---
-        try:
-            async with conn.execute("SELECT id, due_at FROM tasks WHERE due_at IS NOT NULL") as cur:
-                rows = await cur.fetchall()
-            for task_id, due_at in rows:
-                norm = normalize_deadline_iso(due_at)
-                if norm and norm != due_at:
-                    await conn.execute("UPDATE tasks SET due_at = ? WHERE id = ?", (norm, task_id))
-        except Exception:
-            # миграция best-effort
-            pass
-
-        try:
-            async with conn.execute("SELECT id, due_at FROM tasks_history WHERE due_at IS NOT NULL") as cur:
-                rows = await cur.fetchall()
-            for hid, due_at in rows:
-                norm = normalize_deadline_iso(due_at)
-                if norm and norm != due_at:
-                    await conn.execute("UPDATE tasks_history SET due_at = ? WHERE id = ?", (norm, hid))
-        except Exception:
-            pass
+        # Legacy TZ normalization migration removed - data is now stored in UTC
 
         await conn.commit()
 
