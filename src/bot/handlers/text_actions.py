@@ -23,6 +23,7 @@ from time_utils import (
     compute_remind_at_from_offset,
     normalize_deadline_iso,
     now_local,
+    now_in_tz,
     parse_deadline_iso,
 )
 
@@ -334,10 +335,13 @@ async def handle_show_action(
     target_date = None
     weekend_mode = False
 
+    user_timezone = await db.get_user_timezone(user_id)
+    now_tz = now_in_tz(user_timezone) if user_timezone else now_local()
+
     if ai_result.action == "show_today":
-        target_date = now_local().date()
+        target_date = now_tz.date()
     elif ai_result.action == "show_tomorrow":
-        target_date = (now_local() + timedelta(days=1)).date()
+        target_date = (now_tz + timedelta(days=1)).date()
     elif ai_result.action == "show_date" and ai_result.deadline_iso:
         try:
             dt = parse_deadline_iso(ai_result.deadline_iso)
@@ -350,7 +354,7 @@ async def handle_show_action(
 
     if target_date:
         if weekend_mode:
-            today = now_local().date()
+            today = now_tz.date()
             weekday = today.weekday()
             days_to_sat = (5 - weekday) % 7
             days_to_sun = (6 - weekday) % 7
@@ -359,17 +363,14 @@ async def handle_show_action(
 
             parts = []
             for label, d in [("Суббота", sat_date), ("Воскресенье", sun_date)]:
-                tasks_for_day = await filter_tasks_by_date(user_id, d)
+                tasks_for_day = await filter_tasks_by_date(user_id, d, user_timezone)
                 if tasks_for_day:
                     lines = []
                     for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
-                        try:
-                            dt = parse_deadline_iso(due)
-                            if not dt:
-                                raise ValueError("invalid due")
-                            d_str = dt.strftime("%d.%m %H:%M")
+                        d_str = format_deadline_human_local(due, user_timezone)
+                        if d_str:
                             lines.append(f"{i}. {txt} (до {d_str})")
-                        except Exception:
+                        else:
                             lines.append(f"{i}. {txt}")
                     parts.append(f"📌 {label}:\n" + "\n".join(lines))
 
@@ -378,17 +379,14 @@ async def handle_show_action(
             else:
                 await update.message.reply_text("На выходных задач нет 🙂", reply_markup=MAIN_KEYBOARD)
         else:
-            tasks_for_day = await filter_tasks_by_date(user_id, target_date)
+            tasks_for_day = await filter_tasks_by_date(user_id, target_date, user_timezone)
             if tasks_for_day:
                 lines = []
                 for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
-                    try:
-                        dt = parse_deadline_iso(due)
-                        if not dt:
-                            raise ValueError("invalid due")
-                        d_str = dt.strftime("%d.%m %H:%M")
+                    d_str = format_deadline_human_local(due, user_timezone)
+                    if d_str:
                         lines.append(f"{i}. {txt} (до {d_str})")
-                    except Exception:
+                    else:
                         lines.append(f"{i}. {txt}")
                 await update.message.reply_text(
                     "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),

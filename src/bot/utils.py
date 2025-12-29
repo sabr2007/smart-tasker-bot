@@ -291,21 +291,33 @@ async def find_task_by_hint(user_id: int, hint: str):
     return None
 
 
-async def filter_tasks_by_date(user_id: int, target_date) -> list[tuple[int, str, str | None]]:
+async def filter_tasks_by_date(user_id: int, target_date, user_timezone: str = "Asia/Almaty") -> list[tuple[int, str, str | None]]:
     """
-    Возвращает задачи, дедлайн которых совпадает с датой target_date (в локальной TZ).
+    Возвращает задачи, дедлайн которых совпадает с датой target_date (в локальной TZ пользователя).
     """
     tasks = await db.get_tasks(user_id)
     result = []
+    
+    # We need to import utc_to_local inside function or at top level. 
+    # Since imports are usually at top, let's assume we update imports too.
+    # But for now I'll use simple import here to avoid messing up file just for import
+    from time_utils import utc_to_local, parse_deadline_iso
+    
     for t_id, text, due in tasks:
         if not due:
             continue
         try:
+            # Parse stored deadline (UTC)
             dt = parse_deadline_iso(due)
             if not dt:
                 continue
+            
+            # Convert to user timezone
+            local_dt = utc_to_local(dt, user_timezone)
+            
+            if local_dt.date() == target_date:
+                result.append((t_id, text, due))
         except Exception:
             continue
-        if dt.date() == target_date:
-            result.append((t_id, text, due))
     return result
+

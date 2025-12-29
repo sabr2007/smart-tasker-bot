@@ -51,7 +51,7 @@ from bot.handlers.text_actions import (
 
 from llm_client import parse_user_input
 from task_schema import TaskInterpretation
-from time_utils import now_local, parse_deadline_iso
+from time_utils import now_local, now_in_tz, parse_deadline_iso, format_deadline_human_local
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,8 @@ async def _handle_question_query(update: Update, user_id: int, lower_text: str) 
     if not question_like:
         return False
 
-    now = now_local()
+    user_timezone = await db.get_user_timezone(user_id)
+    now = now_in_tz(user_timezone) if user_timezone else now_local()
     target_date = None
 
     if "завтра" in lower_text:
@@ -176,6 +177,8 @@ async def _handle_question_query(update: Update, user_id: int, lower_text: str) 
     elif "сегодня" in lower_text or "на сегодня" in lower_text:
         target_date = now.date()
     else:
+        # TODO: parse_explicit_date should handle timezone if passed, but currently it's simple regex
+        # Assuming explicit date means "date in user calendar", so we use it as is.
         explicit = parse_explicit_date(lower_text)
         if explicit:
             target_date = explicit
@@ -183,17 +186,14 @@ async def _handle_question_query(update: Update, user_id: int, lower_text: str) 
     if not target_date:
         return False
 
-    tasks_for_day = await filter_tasks_by_date(user_id, target_date)
+    tasks_for_day = await filter_tasks_by_date(user_id, target_date, user_timezone)
     if tasks_for_day:
         lines = []
         for i, (tid, txt, due) in enumerate(tasks_for_day, 1):
-            try:
-                dt = parse_deadline_iso(due)
-                if not dt:
-                    raise ValueError("invalid due")
-                d_str = dt.strftime("%d.%m %H:%M")
+            d_str = format_deadline_human_local(due, user_timezone)
+            if d_str:
                 lines.append(f"{i}. {txt} (до {d_str})")
-            except Exception:
+            else:
                 lines.append(f"{i}. {txt}")
         await update.message.reply_text(
             "📌 Задачи на выбранный день:\n\n" + "\n".join(lines),
