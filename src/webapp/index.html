@@ -228,6 +228,25 @@
             <p>4. <b>В чате:</b> «Перенеси встречу на 19:00», «Удали задачу про торт».</p>
           </div>
 
+          <!-- Timezone Selector -->
+          <div class="menu-item" style="flex-direction: column; align-items: stretch; gap: 10px;">
+            <div class="menu-left" style="width: 100%;">
+              <div class="menu-icon"><i data-lucide="globe"></i></div>
+              <div class="menu-title">Часовой пояс</div>
+            </div>
+            <div style="display: flex; gap: 8px; width: 100%; padding-left: 40px;">
+              <select v-model="selectedTimezone" class="input-field" style="flex: 1; padding: 8px 12px;">
+                <option v-for="tz in COMMON_TIMEZONES" :key="tz.value" :value="tz.value">
+                  {{ tz.label }}
+                </option>
+              </select>
+              <button class="primary-btn" style="padding: 8px 16px; min-width: auto;" @click="saveTimezone"
+                :disabled="savingTimezone || selectedTimezone === userTimezone">
+                {{ savingTimezone ? '...' : 'Сохранить' }}
+              </button>
+            </div>
+          </div>
+
           <!-- Archive -->
           <div class="menu-item" @click="openArchive">
             <div class="menu-left">

@@ -5,15 +5,34 @@ Contains: reminders, daily digest, and job restoration logic.
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from telegram.ext import ContextTypes
 
 import db
 from bot.keyboards import snooze_keyboard
-from time_utils import now_local, now_local_iso, parse_deadline_iso
+from time_utils import now_utc, UTC
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_utc_deadline(deadline_iso: str | None) -> datetime | None:
+    """Parse ISO deadline string to UTC datetime.
+    
+    Handles both 'Z' suffix and '+00:00' offset for UTC.
+    """
+    if not deadline_iso:
+        return None
+    s = deadline_iso.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    except Exception:
+        return None
 
 
 async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -73,19 +92,18 @@ def schedule_task_reminder(
     """
     Ставит напоминание в job_queue, если дедлайн в будущем и данные валидны.
     Используется как при создании/переносе задач, так и при восстановлении после рестарта.
+    
+    Note: deadline_iso and remind_at_iso are expected to be in UTC.
     """
     when_iso = remind_at_iso or deadline_iso
     if not job_queue or not when_iso:
         return
 
-    try:
-        dt = parse_deadline_iso(when_iso)
-        if not dt:
-            return
-    except Exception:
+    dt = _parse_utc_deadline(when_iso)
+    if not dt:
         return
 
-    now = now_local()
+    now = now_utc()
     if dt <= now:
         return
 
@@ -115,11 +133,14 @@ def cancel_task_reminder(task_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
 async def restore_reminders(job_queue):
     """
     После рестарта бота восстанавливает напоминания по активным задачам с будущими дедлайнами.
+    
+    Note: Deadlines are stored in UTC, so we compare with UTC now.
     """
     if not job_queue:
         return
 
-    now_iso = now_local_iso()
+    # Use UTC ISO for comparison (with Z suffix)
+    now_iso = now_utc().isoformat().replace("+00:00", "Z")
     tasks = await db.get_active_tasks_with_future_remind(now_iso)
     for task_id, user_id, text, due_at, remind_at, _offset_min in tasks:
         schedule_task_reminder(

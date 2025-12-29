@@ -88,7 +88,9 @@ async def handle_create_action(
 
     if ai_result.deadline_iso:
         due_norm = normalize_deadline_iso(ai_result.deadline_iso)
-        human_deadline = format_deadline_human_local(due_norm) or "непонятное время"
+        # Fetch user timezone for display
+        user_timezone = await db.get_user_timezone(user_id)
+        human_deadline = format_deadline_human_local(due_norm, user_timezone) or "непонятное время"
 
         if due_norm:
             default_offset = 15

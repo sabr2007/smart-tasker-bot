@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from web.routes.tasks import router as tasks_router
+from web.routes.users import router as users_router
 
 
 app = FastAPI(title="smart-tasker web", version="0.1.0")
@@ -18,6 +19,7 @@ async def health():
 
 
 app.include_router(tasks_router)
+app.include_router(users_router)
 
 # --- Frontend (Telegram WebApp) ---
 WEBAPP_DIR = (Path(__file__).resolve().parent.parent / "webapp").resolve()

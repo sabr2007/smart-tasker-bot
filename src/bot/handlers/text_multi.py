@@ -56,6 +56,9 @@ async def process_multi_intent(
     # Local working copy of snapshot to track create/rename within a single message
     tasks_snapshot_work = list(tasks_snapshot)
     
+    # Fetch user timezone for display formatting
+    user_timezone = await db.get_user_timezone(user_id)
+    
     created_lines: list[str] = []
     completed_lines: list[str] = []
     rescheduled_lines: list[str] = []
@@ -92,7 +95,7 @@ async def process_multi_intent(
                     chat_id=chat_id,
                 )
 
-            human_deadline = format_deadline_human_local(item.deadline_iso)
+            human_deadline = format_deadline_human_local(item.deadline_iso, user_timezone)
             if human_deadline:
                 created_lines.append(f"• создано: {task_text} (до {human_deadline})")
             else:
@@ -162,7 +165,7 @@ async def process_multi_intent(
                 chat_id=chat_id,
                 remind_at_iso=new_remind_at,
             )
-            human_deadline = format_deadline_human_local(item.deadline_iso)
+            human_deadline = format_deadline_human_local(item.deadline_iso, user_timezone)
             if item.action == "add_deadline":
                 add_deadline_lines.append(
                     f"• добавил дедлайн: {task_text}" + (f" → {human_deadline}" if human_deadline else "")
@@ -305,10 +308,10 @@ def should_route_multi(text: str) -> bool:
     return has_separator or has_connectors
 
 
-def parse_multi_intents(text: str, tasks_snapshot: list, user_id: int) -> list[TaskInterpretation]:
+def parse_multi_intents(text: str, tasks_snapshot: list, user_id: int, user_timezone: str = "Asia/Almaty") -> list[TaskInterpretation]:
     """Parse text for multiple intents with logging."""
     try:
-        multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot)
+        multi_results = parse_user_input_multi(text, tasks_snapshot=tasks_snapshot, user_timezone=user_timezone)
         if multi_results:
             logger.info(
                 "Multi-parsed %d items for user %s: %s",

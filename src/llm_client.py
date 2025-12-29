@@ -8,14 +8,23 @@ from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 from openai import OpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL, FIXED_TZ_OFFSET
+from config import OPENAI_API_KEY, OPENAI_MODEL, DEFAULT_TIMEZONE
 from prompts import (
     get_multi_parser_system_prompt,
     get_parser_system_prompt,
     get_reply_system_prompt,
 )
 from task_schema import TaskInterpretation
-from time_utils import FIXED_TZ, LOCAL_TZ, now_local, normalize_deadline_iso, parse_deadline_iso
+from time_utils import (
+    DEFAULT_TIMEZONE as TIME_DEFAULT_TZ,
+    now_in_tz,
+    now_utc,
+    normalize_deadline_to_utc,
+    normalize_deadline_iso,  # legacy
+    parse_deadline_iso,
+    get_tz_offset_str,
+    format_deadline_in_tz,
+)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -55,31 +64,46 @@ def _format_tasks_for_prompt(
     return "Актуальные задачи пользователя:\n" + "\n".join(lines)
 
 
-def build_system_prompt(now_str: str, tasks_block: str) -> str:
-    return get_parser_system_prompt(now_str, FIXED_TZ_OFFSET, tasks_block)
+def build_system_prompt(now_str: str, user_timezone: str, tasks_block: str) -> str:
+    tz_offset = get_tz_offset_str(user_timezone)
+    return get_parser_system_prompt(now_str, user_timezone, tz_offset, tasks_block)
 
 
-def build_system_prompt_multi(now_str: str, tasks_block: str, max_items: int) -> str:
-    return get_multi_parser_system_prompt(now_str, FIXED_TZ_OFFSET, tasks_block, max_items)
+def build_system_prompt_multi(now_str: str, user_timezone: str, tasks_block: str, max_items: int) -> str:
+    tz_offset = get_tz_offset_str(user_timezone)
+    return get_multi_parser_system_prompt(now_str, user_timezone, tz_offset, tasks_block, max_items)
 
 
 
 
 
-def _normalize_deadline_iso(raw_value: Any) -> str | None:
+def _normalize_deadline_to_utc(raw_value: Any, user_timezone: str) -> str | None:
     """
-    Backward-совместимый враппер над центральной normalize_deadline_iso().
+    Converts LLM-returned deadline to UTC for storage.
+    
+    Args:
+        raw_value: Raw deadline_iso from LLM (in user's local timezone)
+        user_timezone: User's IANA timezone string
+    
+    Returns:
+        UTC ISO string (with Z suffix) or None
     """
     if raw_value is None:
         return None
     if isinstance(raw_value, datetime):
-        return normalize_deadline_iso(raw_value.isoformat())
+        raw_value = raw_value.isoformat()
     if not isinstance(raw_value, str):
         return None
-    norm = normalize_deadline_iso(raw_value)
+    norm = normalize_deadline_to_utc(raw_value, user_timezone)
     if norm is None:
         logger.warning("deadline_iso is not valid ISO: %r", raw_value)
     return norm
+
+
+# Legacy function for backward compatibility
+def _normalize_deadline_iso(raw_value: Any) -> str | None:
+    """DEPRECATED: Use _normalize_deadline_to_utc instead."""
+    return _normalize_deadline_to_utc(raw_value, DEFAULT_TIMEZONE)
 
 
 _DELETE_ALLOWED_PATTERNS = (
@@ -212,16 +236,23 @@ def parse_user_input_multi(
     user_text: str,
     tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
     max_items: int = 5,
+    user_timezone: str = DEFAULT_TIMEZONE,
 ) -> List[TaskInterpretation]:
     """
     Тонкий адаптер над multi-ответом модели. Модель — источник истины,
     здесь только нормализация формата и бизнес-ограничения.
+    
+    Args:
+        user_text: User message text
+        tasks_snapshot: Current active tasks
+        max_items: Max items to parse
+        user_timezone: User's IANA timezone for date interpretation
     """
-    now = now_local()
+    now = now_in_tz(user_timezone)
     now_str = now.isoformat()
 
     tasks_block = _format_tasks_for_prompt(tasks_snapshot)
-    system_prompt = build_system_prompt_multi(now_str, tasks_block, max_items)
+    system_prompt = build_system_prompt_multi(now_str, user_timezone, tasks_block, max_items)
 
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
@@ -272,7 +303,7 @@ def parse_user_input_multi(
         ti_dict: Dict[str, Any] = {
             "action": action,
             "title": (item.get("title") or None),
-            "deadline_iso": _normalize_deadline_iso(item.get("deadline_iso")),
+            "deadline_iso": _normalize_deadline_to_utc(item.get("deadline_iso"), user_timezone),
             "target_task_hint": _sanitize_target_hint(raw_frag, item.get("target_task_hint")),
             "note": note,
             "language": item.get("language"),
@@ -324,15 +355,21 @@ def parse_user_input_multi(
 def parse_user_input(
     user_text: str,
     tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
+    user_timezone: str = DEFAULT_TIMEZONE,
 ) -> TaskInterpretation:
     """
     Single-режим: модель — источник истины, мы только нормализуем формат и проверяем бизнес-ограничения.
+    
+    Args:
+        user_text: User message text
+        tasks_snapshot: Current active tasks
+        user_timezone: User's IANA timezone for date interpretation
     """
-    now = now_local()
+    now = now_in_tz(user_timezone)
     now_str = now.isoformat()
 
     tasks_block = _format_tasks_for_prompt(tasks_snapshot)
-    system_prompt = build_system_prompt(now_str, tasks_block)
+    system_prompt = build_system_prompt(now_str, user_timezone, tasks_block)
 
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
@@ -351,7 +388,7 @@ def parse_user_input(
         data["raw_input"] = user_text
 
     data["action"] = _validate_action(data.get("action", "unknown"))
-    data["deadline_iso"] = _normalize_deadline_iso(data.get("deadline_iso"))
+    data["deadline_iso"] = _normalize_deadline_to_utc(data.get("deadline_iso"), user_timezone)
     data["target_task_hint"] = _sanitize_target_hint(user_text, data.get("target_task_hint"))
 
     # Phrase validator (минимальная защита)

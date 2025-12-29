@@ -21,7 +21,7 @@ from bot.constants import (
 )
 from llm_client import render_user_reply
 from task_matching import MatchResult, match_task_from_snapshot
-from time_utils import now_local, parse_deadline_iso
+from time_utils import now_local, parse_deadline_iso, format_deadline_in_tz, DEFAULT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +205,23 @@ def parse_explicit_date(text: str) -> date | None:
 
 # ==== FORMATTING =====
 
-def format_deadline_human_local(deadline_iso: Optional[str]) -> Optional[str]:
-    """Локальный формат дедлайна для коротких ответов."""
+def format_deadline_human_local(deadline_iso: Optional[str], user_timezone: str = DEFAULT_TIMEZONE) -> Optional[str]:
+    """Format deadline in user's timezone for display.
+    
+    Args:
+        deadline_iso: ISO deadline string (can be UTC or any timezone)
+        user_timezone: User's IANA timezone for display
+    
+    Returns:
+        Formatted string like "30.12 15:00" in user's timezone
+    """
     if not deadline_iso:
         return None
+    # Use new timezone-aware formatting
+    result = format_deadline_in_tz(deadline_iso, user_timezone)
+    if result:
+        return result
+    # Fallback to legacy parsing
     try:
         dt = parse_deadline_iso(deadline_iso)
         if not dt:

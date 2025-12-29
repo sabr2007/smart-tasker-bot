@@ -114,7 +114,9 @@ async def handle_pending_deadline(
         )
 
         context.user_data.pop("pending_deadline", None)
-        human = format_deadline_human_local(new_due)
+        # Fetch user timezone for display
+        user_timezone = await db.get_user_timezone(user_id)
+        human = format_deadline_human_local(new_due, user_timezone)
         await update.message.reply_text(
             f"Отлично! Дедлайн для «{task_text}»: {human}.\n🔔 Напоминание: за 15 мин.",
             reply_markup=reminder_compact_keyboard(task_id),
@@ -187,7 +189,9 @@ async def handle_pending_reschedule(
         )
 
         context.user_data.pop("pending_reschedule", None)
-        human = format_deadline_human_local(new_due)
+        # Fetch user timezone for display
+        user_timezone = await db.get_user_timezone(user_id)
+        human = format_deadline_human_local(new_due, user_timezone)
         await update.message.reply_text(
             f"Перенёс задачу «{task_text}» на {human}.",
             reply_markup=MAIN_KEYBOARD,

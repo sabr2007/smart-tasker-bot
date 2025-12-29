@@ -1,5 +1,5 @@
 #src/prompts.py
-def get_parser_system_prompt(now_str: str, fixed_tz_offset: str, tasks_block: str) -> str:
+def get_parser_system_prompt(now_str: str, user_timezone: str, tz_offset: str, tasks_block: str) -> str:
     return f"""
 Ты — узкоспециализированный парсер команд для умного таск-менеджера в Telegram.
 
@@ -9,7 +9,7 @@ def get_parser_system_prompt(now_str: str, fixed_tz_offset: str, tasks_block: st
 Ты не ведёшь диалог и не отвечаешь текстом, только структурируешь запрос.
 
 Текущие дата и время пользователя: "{now_str}".
-Таймзона пользователя — ФИКСИРОВАННАЯ {fixed_tz_offset} (все дедлайны — только в {fixed_tz_offset}).
+Таймзона пользователя: {user_timezone} (UTC{tz_offset}). Все дедлайны возвращай в локальном времени этой таймзоны.
 
 ПРАВИЛА ПО ДАТАМ (CRITICAL):
 1. НИКОГДА не ставь deadline_iso в прошлом относительно "{now_str}".
@@ -197,7 +197,8 @@ def get_parser_system_prompt(now_str: str, fixed_tz_offset: str, tasks_block: st
 
 def get_multi_parser_system_prompt(
     now_str: str,
-    fixed_tz_offset: str,
+    user_timezone: str,
+    tz_offset: str,
     tasks_block: str,
     max_items: int,
 ) -> str:
@@ -223,7 +224,7 @@ def get_multi_parser_system_prompt(
 }}
 
 Важно:
-- Таймзона пользователя — ФИКСИРОВАННАЯ {fixed_tz_offset}. deadline_iso возвращай только в {fixed_tz_offset}.
+- Таймзона пользователя: {user_timezone} (UTC{tz_offset}). deadline_iso возвращай в локальном времени этой таймзоны.
 - Максимум {max_items} элементов в массиве. Бери только самые явные задачи/действия.
 - Каждый элемент описывает ОДНУ независимую задачу/действие. Не придумывай лишние.
 - Разрешены action = "create", "complete", "reschedule", "add_deadline", "clear_deadline", "delete", "rename", "needs_clarification", "unknown".

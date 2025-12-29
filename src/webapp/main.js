@@ -3,8 +3,25 @@ const { createApp, ref, computed, reactive, onMounted, watch, nextTick } = Vue;
 const App = {
   setup() {
     // --- Config ---
-    const FIXED_OFFSET = "+05:00"; // Hardcoded offset
     const tg = window.Telegram?.WebApp;
+
+    // Common timezones for dropdown
+    const COMMON_TIMEZONES = [
+      { value: 'Asia/Almaty', label: 'Алматы (UTC+5)' },
+      { value: 'Asia/Tashkent', label: 'Ташкент (UTC+5)' },
+      { value: 'Asia/Bishkek', label: 'Бишкек (UTC+6)' },
+      { value: 'Europe/Moscow', label: 'Москва (UTC+3)' },
+      { value: 'Europe/London', label: 'Лондон (UTC+0)' },
+      { value: 'Europe/Paris', label: 'Париж (UTC+1)' },
+      { value: 'Europe/Berlin', label: 'Берлин (UTC+1)' },
+      { value: 'America/New_York', label: 'Нью-Йорк (UTC-5)' },
+      { value: 'America/Los_Angeles', label: 'Лос-Анджелес (UTC-8)' },
+      { value: 'Asia/Tokyo', label: 'Токио (UTC+9)' },
+      { value: 'Asia/Shanghai', label: 'Шанхай (UTC+8)' },
+      { value: 'Asia/Dubai', label: 'Дубай (UTC+4)' },
+      { value: 'Australia/Sydney', label: 'Сидней (UTC+11)' },
+      { value: 'Asia/Ho_Chi_Minh', label: 'Хо Чи Мин (UTC+7)' },
+    ];
 
     // --- State ---
     const loading = ref(true);
@@ -12,6 +29,11 @@ const App = {
     const activeTab = ref('tasks'); // 'tasks' | 'calendar'
     const settingsOpen = ref(false);
     const showInstructions = ref(false);
+
+    // User Settings State
+    const userTimezone = ref('Asia/Almaty');
+    const selectedTimezone = ref('Asia/Almaty');
+    const savingTimezone = ref(false);
 
     // Archive State
     const archiveOpen = ref(false);
@@ -37,7 +59,7 @@ const App = {
     });
 
     // --- Telegram Integration ---
-    onMounted(() => {
+    onMounted(async () => {
       if (tg) {
         tg.ready();
         tg.expand?.();
@@ -50,6 +72,11 @@ const App = {
           }
         });
       }
+
+      // Load user settings first (for timezone)
+      await loadUserSettings();
+
+      // Then load tasks
       loadTasks();
 
       // Init Lucide icons
@@ -201,6 +228,35 @@ const App = {
       }
     }
 
+    async function loadUserSettings() {
+      try {
+        const settings = await apiFetch('/api/users/me');
+        userTimezone.value = settings.timezone || 'Asia/Almaty';
+        selectedTimezone.value = userTimezone.value;
+      } catch (e) {
+        console.error('Failed to load user settings:', e);
+      }
+    }
+
+    async function saveTimezone() {
+      if (savingTimezone.value) return;
+      savingTimezone.value = true;
+      try {
+        await apiFetch('/api/users/me', {
+          method: 'PATCH',
+          body: JSON.stringify({ timezone: selectedTimezone.value })
+        });
+        userTimezone.value = selectedTimezone.value;
+        if (tg?.showAlert) {
+          tg.showAlert('Часовой пояс сохранён!');
+        }
+      } catch (e) {
+        console.error('Failed to save timezone:', e);
+      } finally {
+        savingTimezone.value = false;
+      }
+    }
+
     async function toggleTask(task) {
       // Optimistic update
       const originalCompleted = task.completed_at;
@@ -261,24 +317,19 @@ const App = {
       let iso = null;
       const now = new Date();
 
-      // Simple offset helpers
+      // Send local datetime - backend converts to UTC
+      // Format: YYYY-MM-DDTHH:mm:ss (without timezone suffix)
       if (type === 'today') {
-        // preserve time or set to end of day? 
-        // Let's set end of day for convenience? Or just date?
-        // Backend expects ISO. Let's just send YYYY-MM-DDT23:59:59+05:00 ideally
-        // But here we use a simple approach:
-        // Actually, let's just pick the date part and keep time?
-        // No, "Today" implies TODAY.
-        iso = getDateKey(now) + 'T23:59:00' + FIXED_OFFSET;
+        iso = getDateKey(now) + 'T23:59:00';
       } else if (type === 'tomorrow') {
         const d = new Date(now);
         d.setDate(d.getDate() + 1);
-        iso = getDateKey(d) + 'T23:59:00' + FIXED_OFFSET;
+        iso = getDateKey(d) + 'T23:59:00';
       } else if (type === 'next_week') {
         // Next Monday
         const d = new Date(now);
         d.setDate(d.getDate() + (1 + 7 - d.getDay()) % 7 || 7);
-        iso = getDateKey(d) + 'T09:00:00' + FIXED_OFFSET;
+        iso = getDateKey(d) + 'T09:00:00';
       } else {
         iso = null; // Clear
       }
@@ -414,6 +465,8 @@ const App = {
       loading, tasks, activeTab, settingsOpen,
       sheet, editForm, showInstructions,
       archiveOpen, archiveTasks, loadingArchive,
+      // Timezone
+      userTimezone, selectedTimezone, savingTimezone, COMMON_TIMEZONES,
       // Computed
       headerTitle, taskGroups,
       calendarTitle, calendarDays, calendarTasks, selectedDate,
@@ -423,6 +476,7 @@ const App = {
       initReschedule, setDeadline,
       openSettings, openArchive, clearArchive,
       calPrevMonth, calNextMonth, selectDate,
+      saveTimezone,
       // Formatters
       formatDue, formatDate, formatTime, isOverdue
     };

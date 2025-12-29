@@ -141,6 +141,65 @@ async def init_db():
         await conn.commit()
 
 
+# ======== USER SETTINGS (Timezone) ========
+
+DEFAULT_TIMEZONE = "Asia/Almaty"
+
+
+async def _ensure_users_table():
+    """Creates users table if not exists."""
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                timezone TEXT DEFAULT 'Asia/Almaty',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await conn.commit()
+
+
+async def get_user_timezone(user_id: int) -> str:
+    """Returns IANA timezone string for user, or default if not set."""
+    await _ensure_users_table()
+    async with get_connection() as conn:
+        async with conn.execute(
+            "SELECT timezone FROM users WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if row and row[0]:
+        return row[0]
+    return DEFAULT_TIMEZONE
+
+
+async def set_user_timezone(user_id: int, tz: str) -> None:
+    """Creates or updates user timezone setting."""
+    await _ensure_users_table()
+    async with get_connection() as conn:
+        # Upsert: INSERT OR REPLACE
+        await conn.execute(
+            """
+            INSERT INTO users (user_id, timezone, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                timezone = excluded.timezone,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, tz),
+        )
+        await conn.commit()
+
+
+async def get_user_settings(user_id: int) -> dict:
+    """Returns user settings dict with timezone."""
+    tz = await get_user_timezone(user_id)
+    return {"user_id": user_id, "timezone": tz}
+
+
 async def add_task(
     user_id: int,
     text: str,

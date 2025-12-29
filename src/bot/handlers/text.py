@@ -101,6 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tasks_snapshot = await db.get_tasks(user_id)
+    user_timezone = await db.get_user_timezone(user_id)
 
     # Determine routing (single vs multi)
     ai_result: Optional[TaskInterpretation] = None
@@ -113,7 +114,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if route_multi:
-        multi_results = parse_multi_intents(text, tasks_snapshot, user_id)
+        multi_results = parse_multi_intents(text, tasks_snapshot, user_id, user_timezone)
         if multi_results and await process_multi_intent(update, context, multi_results, user_id, chat_id, tasks_snapshot):
             return
         # If multi returned single result, use it as ai_result
@@ -123,7 +124,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Fallback to single parse if no multi results
     if ai_result is None:
         try:
-            ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot)
+            ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot, user_timezone=user_timezone)
         except Exception as e:
             logger.exception("parse_user_input failed for user %s: %s", user_id, e)
             await update.message.reply_text(f"🤯 Мозг сломался: {e}", reply_markup=MAIN_KEYBOARD)

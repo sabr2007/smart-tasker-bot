@@ -5,17 +5,170 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-# ЕДИНАЯ ТАЙМЗОНА ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (фиксированный offset)
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore[import,no-redef]
+
+# ======== LEGACY: Fixed offset for backward compatibility ========
+# DEPRECATED: Use per-user timezone functions instead
 FIXED_TZ = timezone(timedelta(hours=5), name="+05:00")
 LOCAL_TZ = FIXED_TZ  # Alias for backward compatibility
 
+# Default timezone for new users (IANA string)
+DEFAULT_TIMEZONE = "Asia/Almaty"
+
+# UTC timezone constant
+UTC = timezone.utc
+
+
+# ======== TIMEZONE-AWARE FUNCTIONS (NEW) ========
+
+def get_tz(tz_name: str) -> ZoneInfo | timezone:
+    """Get ZoneInfo for IANA timezone name, with fallback to default."""
+    if not tz_name:
+        tz_name = DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        # Fallback to default timezone
+        try:
+            return ZoneInfo(DEFAULT_TIMEZONE)
+        except Exception:
+            # Ultimate fallback to fixed offset
+            return FIXED_TZ
+
+
+def now_utc() -> datetime:
+    """Current time in UTC."""
+    return datetime.now(UTC)
+
+
+def now_in_tz(tz_name: str) -> datetime:
+    """Current time in specified timezone."""
+    tz = get_tz(tz_name)
+    return datetime.now(tz)
+
+
+def local_to_utc(dt: datetime, tz_name: str) -> datetime:
+    """Convert naive or local datetime to UTC.
+    
+    If dt is naive, assumes it's in the specified timezone.
+    If dt has tzinfo, converts it to UTC.
+    """
+    tz = get_tz(tz_name)
+    if dt.tzinfo is None:
+        # Naive datetime - assume it's in user's timezone
+        dt = dt.replace(tzinfo=tz)
+    # Convert to UTC
+    return dt.astimezone(UTC)
+
+
+def utc_to_local(dt: datetime, tz_name: str) -> datetime:
+    """Convert datetime to user's local timezone.
+    
+    If dt is naive, assumes it's UTC.
+    """
+    tz = get_tz(tz_name)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(tz)
+
+
+def normalize_deadline_to_utc(deadline_iso: str | None, tz_name: str) -> str | None:
+    """Parse ISO deadline string and convert to UTC.
+    
+    - Parses ISO string (supports 'Z' suffix)
+    - If no time part, defaults to 23:59:00
+    - Interprets datetime in user's timezone if no offset in string
+    - Returns UTC ISO string
+    """
+    if deadline_iso is None:
+        return None
+    if not isinstance(deadline_iso, str):
+        return None
+
+    s = deadline_iso.strip()
+    if not s:
+        return None
+
+    # Support "Z" (UTC)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+    # If no time part (only date) - set to 23:59
+    if not _has_explicit_time_part(s):
+        dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
+
+    # If datetime is naive, interpret as user's local timezone
+    if dt.tzinfo is None:
+        tz = get_tz(tz_name)
+        dt = dt.replace(tzinfo=tz)
+
+    # Convert to UTC and return ISO string
+    utc_dt = dt.astimezone(UTC)
+    return utc_dt.isoformat().replace("+00:00", "Z")
+
+
+def format_deadline_in_tz(utc_iso: str | None, tz_name: str, fmt: str = "%d.%m %H:%M") -> str | None:
+    """Format UTC deadline for display in user's timezone.
+    
+    Args:
+        utc_iso: ISO string in UTC (with 'Z' suffix or +00:00)
+        tz_name: User's IANA timezone name
+        fmt: strftime format string
+    
+    Returns:
+        Formatted string in user's timezone, or None if parsing fails.
+    """
+    if not utc_iso:
+        return None
+    
+    s = utc_iso.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        return None
+    
+    # Convert to user's timezone
+    local_dt = utc_to_local(dt, tz_name)
+    return local_dt.strftime(fmt)
+
+
+def get_tz_offset_str(tz_name: str) -> str:
+    """Get current UTC offset string for timezone (e.g., '+05:00')."""
+    tz = get_tz(tz_name)
+    now = datetime.now(tz)
+    offset = now.utcoffset()
+    if offset is None:
+        return "+00:00"
+    total_seconds = int(offset.total_seconds())
+    hours, remainder = divmod(abs(total_seconds), 3600)
+    minutes = remainder // 60
+    sign = "+" if total_seconds >= 0 else "-"
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+# ======== LEGACY FUNCTIONS (for backward compatibility) ========
 
 def now_local() -> datetime:
-    """Текущее время в фиксированной TZ (+05:00)."""
+    """Текущее время в фиксированной TZ (+05:00).
+    
+    DEPRECATED: Use now_in_tz(tz_name) instead.
+    """
     return datetime.now(FIXED_TZ)
 
 
 def now_local_iso() -> str:
+    """DEPRECATED: Use now_utc().isoformat() instead."""
     return now_local().isoformat()
 
 
