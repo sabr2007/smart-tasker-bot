@@ -21,7 +21,6 @@ from bot.utils import (
 from task_schema import TaskInterpretation
 from time_utils import (
     compute_remind_at_from_offset,
-    normalize_deadline_iso,
     now_local,
     now_in_tz,
     parse_deadline_iso,
@@ -81,14 +80,16 @@ async def handle_create_action(
         return False
 
     task_text = ai_result.title or ai_result.raw_input
+    # ai_result.deadline_iso is already in UTC from llm_client.py
     task_id = await db.add_task(
         user_id,
         task_text,
-        normalize_deadline_iso(ai_result.deadline_iso),
+        ai_result.deadline_iso,
     )
 
     if ai_result.deadline_iso:
-        due_norm = normalize_deadline_iso(ai_result.deadline_iso)
+        # Already normalized to UTC in llm_client.py
+        due_norm = ai_result.deadline_iso
         # Fetch user timezone for display
         user_timezone = await db.get_user_timezone(user_id)
         human_deadline = format_deadline_human_local(due_norm, user_timezone) or "непонятное время"
@@ -121,7 +122,7 @@ async def handle_create_action(
     event = {
         "type": "task_created",
         "task_text": task_text,
-        "deadline_iso": normalize_deadline_iso(ai_result.deadline_iso),
+        "deadline_iso": ai_result.deadline_iso,  # Already in UTC or None
         "prev_deadline_iso": None,
         "num_active_tasks": len(await db.get_tasks(user_id)),
         "language": "ru",
@@ -229,7 +230,8 @@ async def handle_reschedule_action(
     prev_task = await db.get_task(user_id, task_id)
     prev_deadline = prev_task[2] if prev_task else None
 
-    new_due = normalize_deadline_iso(ai_result.deadline_iso)
+    # ai_result.deadline_iso is already in UTC from llm_client.py
+    new_due = ai_result.deadline_iso
     await db.update_task_due(user_id, task_id, new_due)
 
     _remind_at, offset_min, _due_at_db, task_text_db = await db.get_task_reminder_settings(user_id, task_id)

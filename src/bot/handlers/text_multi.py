@@ -17,7 +17,7 @@ from bot.utils import (
 )
 from llm_client import parse_user_input_multi
 from task_schema import TaskInterpretation
-from time_utils import compute_remind_at_from_offset, normalize_deadline_iso
+from time_utils import compute_remind_at_from_offset
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,8 @@ async def process_multi_intent(
 
         if item.action == "create":
             task_text = item.title or item.raw_input
-            norm_due = normalize_deadline_iso(item.deadline_iso)
+            # item.deadline_iso is already in UTC from llm_client.py
+            norm_due = item.deadline_iso
             task_id = await db.add_task(user_id, task_text, norm_due)
             tasks_snapshot_work.append((task_id, task_text, norm_due))
 
@@ -143,7 +144,8 @@ async def process_multi_intent(
                 continue
 
             cancel_task_reminder(task_id, context)
-            new_due = normalize_deadline_iso(item.deadline_iso)
+            # item.deadline_iso is already in UTC from llm_client.py
+            new_due = item.deadline_iso
             await db.update_task_due(user_id, task_id, new_due)
             tasks_snapshot_work = [
                 (tid, txt, (new_due if tid == task_id else due))
