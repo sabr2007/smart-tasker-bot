@@ -451,6 +451,26 @@ async def get_archived_tasks(
             return await cur.fetchall()
 
 
+async def get_completed_tasks_since(
+    user_id: int,
+    since_iso: str,
+) -> list[tuple[int, str, Optional[str], Optional[str]]]:
+    """Возвращает задачи, выполненные после указанного времени (ISO)."""
+    async with get_connection() as conn:
+        async with conn.execute(
+            """
+            SELECT id, text, due_at, completed_at
+            FROM tasks
+            WHERE user_id = ? 
+              AND status = 'done'
+              AND completed_at >= ?
+            ORDER BY completed_at DESC
+            """,
+            (user_id, since_iso),
+        ) as cur:
+            return await cur.fetchall()
+
+
 async def clear_archived_tasks(user_id: int) -> None:
     """Очищает архив выполненных задач пользователя + пишет снимки в tasks_history."""
     async with get_connection() as conn:

@@ -188,6 +188,11 @@ body,
   word-break: break-word;
 }
 
+.text-done {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
 .task-meta {
   font-size: 13px;
   color: var(--tg-theme-hint-color);

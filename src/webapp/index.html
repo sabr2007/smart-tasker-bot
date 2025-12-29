@@ -50,13 +50,13 @@
             <div v-for="group in taskGroups" :key="group.title" class="task-group">
               <div class="group-title">{{ group.title }}</div>
               <div v-for="task in group.items" :key="task.id" class="task-item" @click="openSheet(task)">
-                <div class="task-checkbox" :class="{ done: false }" @click.stop="toggleTask(task)">
+                <div class="task-checkbox" :class="{ done: !!task.completed_at }" @click.stop="toggleTask(task)">
                   <i data-lucide="check"></i>
                 </div>
                 <div class="task-content">
-                  <div class="task-text">{{ task.text }}</div>
+                  <div class="task-text" :class="{ 'text-done': !!task.completed_at }">{{ task.text }}</div>
                   <div class="task-meta" :class="{ overdue: isOverdue(task) }">
-                    <i data-lucide="clock" style="width:12px; height:12px;"></i>
+                    <i data-lucide="clock" style="width:12px; height:12px;" v-if="task.due_at"></i>
                     {{ formatDue(task.due_at) }}
                   </div>
                 </div>

@@ -116,9 +116,13 @@ const App = {
       const today = [];
       const upcoming = [];  // Tasks with future deadline
       const noDeadline = []; // Tasks without deadline
+      const completed = []; // New completed group
 
       tasks.value.forEach(t => {
-        if (t.completed_at) return; // Skip completed in main list
+        if (t.completed_at) {
+          completed.push(t);
+          return;
+        }
 
         const dueMs = t.due_at ? Date.parse(t.due_at) : null;
 
@@ -138,6 +142,9 @@ const App = {
       if (today.length) groups.push({ title: '📅 Сегодня', items: today });
       if (upcoming.length) groups.push({ title: '🔜 Скоро', items: upcoming });
       if (noDeadline.length) groups.push({ title: '📋 Без срока', items: noDeadline });
+
+      // Completed at the bottom
+      if (completed.length) groups.push({ title: '✅ Выполненные', items: completed });
 
       return groups;
     });
@@ -222,7 +229,34 @@ const App = {
     async function loadTasks() {
       try {
         loading.value = true;
-        tasks.value = await apiFetch('/api/tasks');
+
+        // Fetch active tasks
+        const activePromise = apiFetch('/api/tasks');
+
+        // Fetch completed tasks (since today or last 10)
+        // We'll calculate "today" start ISO roughly based on user timezone or local
+        let since = '';
+        try {
+          // Use selected timezone to define "today"
+          const tz = userTimezone.value || 'Asia/Almaty';
+          const todayStr = getDateKeyInTz(new Date(), tz);
+          since = todayStr; // Backend accepts YYYY-MM-DD as prefix or >= comparison string
+        } catch (e) {
+          since = '';
+        }
+
+        const completedPromise = apiFetch(`/api/tasks/completed?since=${since}`);
+
+        const [active, completed] = await Promise.all([activePromise, completedPromise]);
+
+        // Merge them, handling potential duplicates if any (shouldn't be, but good practice)
+        // Using Map to dedupe by ID
+        const map = new Map();
+        active.forEach(t => map.set(t.id, t));
+        completed.forEach(t => map.set(t.id, t));
+
+        tasks.value = Array.from(map.values());
+
       } catch (e) {
         console.error(e);
       } finally {

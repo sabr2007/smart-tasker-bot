@@ -66,6 +66,25 @@ async def list_archived_tasks(user=Depends(get_current_user), limit: int = 50):
     return [_archived_tuple_to_out(r) for r in rows]
 
 
+@router.get("/completed", response_model=list[ArchivedTaskOut])
+async def list_completed_tasks(
+    since: Optional[str] = None, 
+    user=Depends(get_current_user)
+):
+    """
+    Возвращает выполненные задачи.
+    Если передан since (ISO), возвращает выполненные после этого времени.
+    Иначе возвращает последние 10.
+    """
+    user_id = int(user["user_id"])
+    if since:
+        rows = await db.get_completed_tasks_since(user_id, since)
+    else:
+        rows = await db.get_archived_tasks(user_id, limit=10)
+    
+    return [_archived_tuple_to_out(r) for r in rows]
+
+
 @router.get("/{task_id}", response_model=TaskOut)
 async def get_task(task_id: int, user=Depends(get_current_user)):
     user_id = int(user["user_id"])
