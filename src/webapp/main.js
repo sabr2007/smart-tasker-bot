@@ -107,7 +107,10 @@ const App = {
     // Group tasks for List View
     const taskGroups = computed(() => {
       const nowMs = Date.now();
-      const todayKey = getDateKey(new Date());
+      const tz = userTimezone.value || 'Asia/Almaty';
+
+      // Get today's date key in user's timezone
+      const todayKey = getDateKeyInTz(new Date(), tz);
 
       const overdue = [];
       const today = [];
@@ -121,7 +124,7 @@ const App = {
 
         if (dueMs && dueMs < nowMs) {
           overdue.push(t);
-        } else if (dueMs && getDateKey(new Date(dueMs)) === todayKey) {
+        } else if (dueMs && getDateKeyInTz(new Date(dueMs), tz) === todayKey) {
           today.push(t);
         } else if (dueMs) {
           upcoming.push(t);  // Has future deadline
@@ -401,17 +404,53 @@ const App = {
       return `${y}-${m}-${d}`;
     }
 
+    // Get date key in specific timezone (for comparing dates across timezones)
+    function getDateKeyInTz(date, tz) {
+      try {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(date);
+        const y = parts.find(p => p.type === 'year').value;
+        const m = parts.find(p => p.type === 'month').value;
+        const d = parts.find(p => p.type === 'day').value;
+        return `${y}-${m}-${d}`;
+      } catch (e) {
+        // Fallback to browser local
+        return getDateKey(date);
+      }
+    }
+
     function formatDue(iso) {
       if (!iso) return '';
       const date = new Date(iso);
       if (isNaN(date)) return iso;
 
-      // Simple format: DD.MM HH:mm
-      const day = String(date.getDate()).padStart(2, '0');
-      const mo = String(date.getMonth() + 1).padStart(2, '0');
-      const h = String(date.getHours()).padStart(2, '0');
-      const m = String(date.getMinutes()).padStart(2, '0');
-      return `${day}.${mo} ${h}:${m}`;
+      // Use user's selected timezone for display
+      const tz = userTimezone.value || 'Asia/Almaty';
+      try {
+        const dayMonth = new Intl.DateTimeFormat('ru-RU', {
+          timeZone: tz,
+          day: '2-digit',
+          month: '2-digit'
+        }).format(date);
+        const time = new Intl.DateTimeFormat('ru-RU', {
+          timeZone: tz,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(date);
+        return `${dayMonth} ${time}`;
+      } catch (e) {
+        // Fallback to browser local if timezone invalid
+        const day = String(date.getDate()).padStart(2, '0');
+        const mo = String(date.getMonth() + 1).padStart(2, '0');
+        const h = String(date.getHours()).padStart(2, '0');
+        const m = String(date.getMinutes()).padStart(2, '0');
+        return `${day}.${mo} ${h}:${m}`;
+      }
     }
 
     function formatDate(dateStr) {
@@ -422,10 +461,24 @@ const App = {
 
     function formatTime(iso) {
       if (!iso) return '';
-      const d = new Date(iso);
-      const h = String(d.getHours()).padStart(2, '0');
-      const m = String(d.getMinutes()).padStart(2, '0');
-      return `${h}:${m}`;
+      const date = new Date(iso);
+      if (isNaN(date)) return '';
+
+      // Use user's selected timezone for display
+      const tz = userTimezone.value || 'Asia/Almaty';
+      try {
+        return new Intl.DateTimeFormat('ru-RU', {
+          timeZone: tz,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(date);
+      } catch (e) {
+        // Fallback to browser local
+        const h = String(date.getHours()).padStart(2, '0');
+        const m = String(date.getMinutes()).padStart(2, '0');
+        return `${h}:${m}`;
+      }
     }
 
     function isOverdue(task) {
