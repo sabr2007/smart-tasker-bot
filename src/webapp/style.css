@@ -7,6 +7,7 @@
   --tg-theme-button-text-color: #ffffff;
   --tg-theme-destructive-text-color: #ff3b30;
   --tg-theme-header-bg-color: #ffffff;
+  --tabbar-height: 60px;
 }
 
 [v-cloak] {
@@ -18,7 +19,8 @@
 }
 
 html,
-body {
+body,
+#app {
   height: 100%;
   margin: 0;
   padding: 0;
