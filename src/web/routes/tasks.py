@@ -144,8 +144,12 @@ async def complete_task(task_id: int, user=Depends(get_current_user)) -> Dict[st
     await db.set_task_done(user_id, task_id)
     return {"ok": True}
 
-
-
+@router.delete("/archive")
+async def clear_archive(user=Depends(get_current_user)) -> Dict[str, Any]:
+    """Очищает архив выполненных задач пользователя."""
+    user_id = int(user["user_id"])
+    await db.clear_archived_tasks(user_id)
+    return {"ok": True}
 
 
 @router.delete("/{task_id}")
@@ -156,6 +160,3 @@ async def delete_task(task_id: int, user=Depends(get_current_user)) -> Dict[str,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete_task(user_id, task_id)
     return {"ok": True}
-
-
-

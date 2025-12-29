@@ -105,8 +105,8 @@
 
       </main>
 
-      <!-- Tabbar -->
-      <div class="tabbar">
+      <!-- Tabbar (скрываем при открытых оверлеях) -->
+      <div class="tabbar" v-show="!settingsOpen && !archiveOpen">
         <button class="tab-btn" :class="{ active: activeTab === 'tasks' }" @click="activeTab = 'tasks'">
           <i data-lucide="list-todo"></i>
           <span>Задачи</span>

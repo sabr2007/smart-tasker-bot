@@ -66,8 +66,8 @@ const App = {
       }
     });
 
-    // Re-render icons when tab or sheet changes
-    watch([activeTab, () => sheet.mode, () => sheet.open], () => {
+    // Re-render icons when tab, sheet, or settings changes
+    watch([activeTab, () => sheet.mode, () => sheet.open, settingsOpen, showInstructions, archiveOpen], () => {
       nextTick(() => lucide.createIcons());
     });
 
@@ -84,7 +84,8 @@ const App = {
 
       const overdue = [];
       const today = [];
-      const upcoming = [];
+      const upcoming = [];  // Tasks with future deadline
+      const noDeadline = []; // Tasks without deadline
 
       tasks.value.forEach(t => {
         if (t.completed_at) return; // Skip completed in main list
@@ -95,15 +96,18 @@ const App = {
           overdue.push(t);
         } else if (dueMs && getDateKey(new Date(dueMs)) === todayKey) {
           today.push(t);
+        } else if (dueMs) {
+          upcoming.push(t);  // Has future deadline
         } else {
-          upcoming.push(t);
+          noDeadline.push(t);  // No deadline
         }
       });
 
       const groups = [];
       if (overdue.length) groups.push({ title: '🚨 Просрочено', items: overdue });
       if (today.length) groups.push({ title: '📅 Сегодня', items: today });
-      if (upcoming.length) groups.push({ title: '🔜 Скоро / Без срока', items: upcoming });
+      if (upcoming.length) groups.push({ title: '🔜 Скоро', items: upcoming });
+      if (noDeadline.length) groups.push({ title: '📋 Без срока', items: noDeadline });
 
       return groups;
     });

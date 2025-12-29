@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import db
-from bot.constants import NO_REMINDER_PHRASES
+from bot.constants import NO_REMINDER_PHRASES, TASK_VERB_HINTS
 from bot.jobs import cancel_task_reminder, schedule_task_reminder
 from bot.keyboards import MAIN_KEYBOARD, reminder_compact_keyboard
 from bot.utils import format_deadline_human_local, is_deadline_like
@@ -22,6 +22,33 @@ from time_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_new_task(text: str) -> bool:
+    """
+    Determines if text looks like a NEW task with embedded date/time,
+    rather than just a deadline response like "завтра" or "в 18:00".
+    
+    Returns True if text contains task-like verbs AND has enough content.
+    Example: "Сходить завтра на тренировку в 18:00" -> True (new task)
+    Example: "завтра в 18:00" -> False (just a deadline)
+    """
+    lower = text.lower()
+    
+    # Check for task-like verbs
+    has_task_verb = any(verb in lower for verb in TASK_VERB_HINTS)
+    
+    # A new task typically has more content than just a time expression
+    # "завтра в 18:00" is ~15 chars, a real task is usually longer
+    is_long_enough = len(text) > 15
+    
+    # Count meaningful words (excluding common time words)
+    words = lower.split()
+    time_words = {"в", "на", "завтра", "сегодня", "через", "час", "часа", "минут", "минуту"}
+    meaningful_words = [w for w in words if w not in time_words and len(w) > 2]
+    has_enough_words = len(meaningful_words) >= 2
+    
+    return has_task_verb or (is_long_enough and has_enough_words)
 
 
 async def handle_pending_deadline(
@@ -50,6 +77,13 @@ async def handle_pending_deadline(
             reply_markup=MAIN_KEYBOARD,
         )
         return True
+
+    # Check if this looks like a NEW task with embedded date/time
+    # rather than just a deadline response
+    if _looks_like_new_task(text):
+        # User is adding a new task, not specifying deadline for previous one
+        context.user_data.pop("pending_deadline", None)
+        return False  # Let the main handler create new task
 
     # Try to parse as delay or datetime
     now = now_local()
