@@ -11,9 +11,10 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo  # type: ignore[import,no-redef]
 
 # ======== LEGACY: Fixed offset for backward compatibility ========
-# DEPRECATED: Use per-user timezone functions instead
-FIXED_TZ = timezone(timedelta(hours=5), name="+05:00")
-LOCAL_TZ = FIXED_TZ  # Alias for backward compatibility
+# DEPRECATED: These are kept only for third-party code that might import them.
+# Internal code now uses get_tz(DEFAULT_TIMEZONE) for dynamic timezone resolution.
+FIXED_TZ = timezone(timedelta(hours=5), name="+05:00")  # DEPRECATED
+LOCAL_TZ = FIXED_TZ  # DEPRECATED alias
 
 # Default timezone for new users (IANA string)
 DEFAULT_TIMEZONE = "Asia/Almaty"
@@ -160,11 +161,11 @@ def get_tz_offset_str(tz_name: str) -> str:
 # ======== LEGACY FUNCTIONS (for backward compatibility) ========
 
 def now_local() -> datetime:
-    """Текущее время в фиксированной TZ (+05:00).
+    """Текущее время в дефолтной таймзоне.
     
     DEPRECATED: Use now_in_tz(tz_name) instead.
     """
-    return datetime.now(FIXED_TZ)
+    return datetime.now(get_tz(DEFAULT_TIMEZONE))
 
 
 def now_local_iso() -> str:
@@ -210,10 +211,10 @@ def normalize_deadline_iso(deadline_iso: str | None) -> str | None:
     if not _has_explicit_time_part(s):
         dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    # Если TZ нет — считаем локальной (+05:00).
-    # Если TZ есть, но она не +05 — для UX трактуем как локальное время пользователя
+    # Если TZ нет — считаем локальной (default timezone).
+    # Если TZ есть, но она другая — для UX трактуем как локальное время пользователя
     # и просто заменяем offset без сдвига часов.
-    dt = dt.replace(tzinfo=FIXED_TZ)
+    dt = dt.replace(tzinfo=get_tz(DEFAULT_TIMEZONE))
     return dt.isoformat()
 
 
@@ -367,7 +368,7 @@ def parse_datetime_from_text(
     hhmm = parse_hhmm(text)
     ddmm = parse_ddmm(text)
 
-    tz = now.tzinfo or FIXED_TZ
+    tz = now.tzinfo or get_tz(DEFAULT_TIMEZONE)
 
     # DD.MM(.YYYY) + HH:MM
     if ddmm and hhmm:

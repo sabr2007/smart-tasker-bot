@@ -177,9 +177,8 @@ async def _handle_question_query(update: Update, user_id: int, lower_text: str) 
     elif "сегодня" in lower_text or "на сегодня" in lower_text:
         target_date = now.date()
     else:
-        # TODO: parse_explicit_date should handle timezone if passed, but currently it's simple regex
-        # Assuming explicit date means "date in user calendar", so we use it as is.
-        explicit = parse_explicit_date(lower_text)
+        # Parse explicit dates like "9 декабря" using user's timezone
+        explicit = parse_explicit_date(lower_text, user_timezone)
         if explicit:
             target_date = explicit
 

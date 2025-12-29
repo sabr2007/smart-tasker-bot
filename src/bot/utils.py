@@ -21,7 +21,7 @@ from bot.constants import (
 )
 from llm_client import render_user_reply
 from task_matching import MatchResult, match_task_from_snapshot
-from time_utils import now_local, parse_deadline_iso, format_deadline_in_tz, DEFAULT_TIMEZONE
+from time_utils import parse_deadline_iso, format_deadline_in_tz, DEFAULT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -165,11 +165,17 @@ def detect_rename_intent(text: str) -> dict | None:
 
 # ==== DATE PARSING =====
 
-def parse_explicit_date(text: str) -> date | None:
+def parse_explicit_date(text: str, user_timezone: str = DEFAULT_TIMEZONE) -> date | None:
     """
     Пытается вытащить дату вида "9 декабря" из текста.
     Возвращает date или None.
+    
+    Args:
+        text: Text to parse
+        user_timezone: User's IANA timezone for "today" resolution
     """
+    from time_utils import now_in_tz
+    
     lower = text.lower()
     m = re.search(
         r"\b(\d{1,2})\s+("
@@ -185,7 +191,8 @@ def parse_explicit_date(text: str) -> date | None:
     day = int(day_str)
     month = MONTHS_RU[month_word]
 
-    now = now_local()
+    # Use user's timezone to determine "now"
+    now = now_in_tz(user_timezone)
     year = now.year
 
     try:
