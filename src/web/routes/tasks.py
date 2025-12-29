@@ -38,16 +38,18 @@ class TaskPatchIn(BaseModel):
 
 def _task_tuple_to_out(row: tuple[int, str, Optional[str]]) -> TaskOut:
     tid, text, due = row
-    return TaskOut(id=int(tid), text=text, due_at=normalize_deadline_iso(due) if due else None)
+    # due_at is already stored in UTC format in the database
+    return TaskOut(id=int(tid), text=text, due_at=due)
 
 
 def _archived_tuple_to_out(row: tuple[int, str, Optional[str], Optional[str]]) -> ArchivedTaskOut:
     tid, text, due, completed_at = row
+    # due_at and completed_at are already stored in UTC format in the database
     return ArchivedTaskOut(
         id=int(tid),
         text=text,
-        due_at=normalize_deadline_iso(due) if due else None,
-        completed_at=normalize_deadline_iso(completed_at) if completed_at else None,
+        due_at=due,
+        completed_at=completed_at,
     )
 
 

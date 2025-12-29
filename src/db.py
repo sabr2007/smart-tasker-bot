@@ -207,7 +207,7 @@ async def add_task(
     category: Optional[str] = None,
 ) -> int:
     """Добавляет задачу и возвращает её ID."""
-    due_at_iso = normalize_deadline_iso(due_at_iso)
+    # Note: due_at_iso should already be in UTC format when coming from handlers
     remind_at_iso = due_at_iso if due_at_iso else None
     remind_offset_min = 0 if due_at_iso else None
     async with get_connection() as conn:
@@ -325,7 +325,7 @@ async def update_task_reminder_settings(
     - remind_at_iso: следующее напоминание (ISO) или None (не напоминать)
     - remind_offset_min: предпочтение "за сколько" в минутах (0/5/30/60/...), или None если remind_at задан как абсолютное время
     """
-    remind_at_iso = normalize_deadline_iso(remind_at_iso)
+    # Note: remind_at_iso should already be normalized before reaching here
     async with get_connection() as conn:
         await conn.execute(
             "UPDATE tasks SET remind_at = ?, remind_offset_min = ? WHERE id = ? AND user_id = ?",
@@ -374,7 +374,7 @@ async def _archive_task_snapshot(
 
 async def update_task_due(user_id: int, task_id: int, due_at_iso: Optional[str]):
     """Обновляет дедлайн задачи."""
-    due_at_iso = normalize_deadline_iso(due_at_iso)
+    # Note: due_at_iso should already be normalized before reaching here
     async with get_connection() as conn:
         await conn.execute(
             "UPDATE tasks SET due_at = ? WHERE id = ? AND user_id = ?",

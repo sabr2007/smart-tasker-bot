@@ -410,9 +410,10 @@ const App = {
     async function saveDeadline() {
       if (!sheet.task) return;
       // editForm.date is YYYY-MM-DDTHH:mm from input
+      // Send without timezone suffix - backend handles conversion
       let iso = null;
       if (editForm.date) {
-        iso = editForm.date + ':00' + FIXED_OFFSET;
+        iso = editForm.date + ':00';
       }
       await apiFetch(`/api/tasks/${sheet.task.id}`, {
         method: 'PATCH',
