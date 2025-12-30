@@ -48,64 +48,85 @@ from bot.handlers.callbacks import (
 
 def main():
     """Entry point for the bot."""
-    # Важно для Python 3.11+: python-telegram-bot (20.x) внутри run_polling()
-    # использует asyncio.get_event_loop(). Если перед этим вызвать asyncio.run(...),
-    # то он создаст и закроет loop, оставив в MainThread "no current event loop".
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(db.init_db())
-
-    # Build app with increased timeouts for Railway network issues
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .connect_timeout(30.0)  # Default is 5.0
-        .read_timeout(30.0)     # Default is 5.0
-        .write_timeout(30.0)    # Default is 5.0
-        .build()
-    )
-
-    # текстовые сообщения
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # голосовые сообщения
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-
-    # inline-кнопки
-    app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
-    app.add_handler(CallbackQueryHandler(on_mark_done_select, pattern=r"^done_task:\d+$"))
-    app.add_handler(CallbackQueryHandler(on_remind_set, pattern=r"^remind_set:\d+:(?:off|0|5|30|60)$"))
-    app.add_handler(CallbackQueryHandler(on_snooze_prompt, pattern=r"^snooze_prompt:\d+$"))
-    app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
-    app.add_handler(CallbackQueryHandler(on_remind_expand, pattern=r"^remind_expand:\d+$"))
- 
-
-    # команды админа
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
-
-    # --- УТРЕННИЙ ДАЙДЖЕСТ 07:30 ---
-    if app.job_queue:
-        app.job_queue.run_daily(
-            send_daily_digest,
-            time=dtime(hour=7, minute=30, tzinfo=LOCAL_TZ),
-            name="daily_digest",
-        )
-        # восстановим напоминания для задач с будущими дедлайнами (после старта event loop)
-        app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
-
     print("AI Smart-Tasker запущен... 🚀")
+
     # Retry loop for network issues (Railway)
     while True:
         try:
+            # --- DIAGNOSTICS START ---
+            try:
+                import httpx
+                logging.info("Testing connection to api.telegram.org...")
+                resp = httpx.get("https://api.telegram.org", timeout=5.0)
+                logging.info(f"Connection to Telegram OK: {resp.status_code}")
+            except Exception as net_err:
+                logging.error(f"Connection to Telegram FAILED: {net_err}")
+            # --- DIAGNOSTICS END ---
+
+            # 1. Создаем новый Event Loop для каждой попытки
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # 2. Инициализируем БД
+            loop.run_until_complete(db.init_db())
+
+            # 3. Строим приложение
+            app = (
+                ApplicationBuilder()
+                .token(TELEGRAM_BOT_TOKEN)
+                .connect_timeout(30.0)
+                .read_timeout(30.0)
+                .write_timeout(30.0)
+                .build()
+            )
+
+            # 4. Регистрируем хэндлеры
+            # текстовые сообщения
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+            # голосовые сообщения
+            app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+
+            # inline-кнопки
+            app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
+            app.add_handler(CallbackQueryHandler(on_mark_done_select, pattern=r"^done_task:\d+$"))
+            app.add_handler(CallbackQueryHandler(on_remind_set, pattern=r"^remind_set:\d+:(?:off|0|5|30|60)$"))
+            app.add_handler(CallbackQueryHandler(on_snooze_prompt, pattern=r"^snooze_prompt:\d+$"))
+            app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
+            app.add_handler(CallbackQueryHandler(on_remind_expand, pattern=r"^remind_expand:\d+$"))
+
+            # команды админа
+            app.add_handler(CommandHandler("start", cmd_start))
+            app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
+            app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+
+            # --- УТРЕННИЙ ДАЙДЖЕСТ 07:30 ---
+            if app.job_queue:
+                app.job_queue.run_daily(
+                    send_daily_digest,
+                    time=dtime(hour=7, minute=30, tzinfo=LOCAL_TZ),
+                    name="daily_digest",
+                )
+                app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
+
+            # 5. Запускаем polling
+            logging.info("Starting polling...")
             app.run_polling()
-            break # Exit loop if polling stops cleanly (e.g. signal)
+            
+            # Если вышли штатно
+            break
+
         except Exception as e:
-            logging.error(f"Network error in polling: {e}")
-            logging.info("Retrying in 5 seconds...")
+            logging.error(f"Critical error in main loop: {e}")
+            logging.info("Restarting bot in 10 seconds...")
             import time
-            time.sleep(5)
+            time.sleep(10)
+        finally:
+            try:
+                if 'loop' in locals() and not loop.is_closed():
+                    loop.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
