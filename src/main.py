@@ -96,7 +96,16 @@ def main():
         app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
 
     print("AI Smart-Tasker запущен... 🚀")
-    app.run_polling()
+    # Retry loop for network issues (Railway)
+    while True:
+        try:
+            app.run_polling()
+            break # Exit loop if polling stops cleanly (e.g. signal)
+        except Exception as e:
+            logging.error(f"Network error in polling: {e}")
+            logging.info("Retrying in 5 seconds...")
+            import time
+            time.sleep(5)
 
 
 if __name__ == "__main__":
