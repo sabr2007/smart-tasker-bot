@@ -55,7 +55,15 @@ def main():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(db.init_db())
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    # Build app with increased timeouts for Railway network issues
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30.0)  # Default is 5.0
+        .read_timeout(30.0)     # Default is 5.0
+        .write_timeout(30.0)    # Default is 5.0
+        .build()
+    )
 
     # текстовые сообщения
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
