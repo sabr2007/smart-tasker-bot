@@ -32,7 +32,7 @@
       <!-- Header -->
       <header class="header">
         <div class="header-title">{{ headerTitle }}</div>
-        <button class="icon-btn" @click="openSettings">
+        <button class="icon-btn" @click="openSettings" aria-label="Открыть настройки">
           <i data-lucide="settings"></i>
         </button>
       </header>
@@ -62,7 +62,7 @@
                 </div>
                 <!-- Archive Action -->
                 <button v-if="task.completed_at" class="icon-btn"
-                  style="color: var(--tg-theme-hint-color); padding: 4px;" @click.stop="archiveTask(task)">
+                  style="color: var(--tg-theme-hint-color); padding: 4px;" @click.stop="archiveTask(task)" aria-label="Архивировать">
                   <i data-lucide="archive" style="width: 18px; height: 18px;"></i>
                 </button>
               </div>
@@ -74,9 +74,9 @@
         <div v-show="activeTab === 'calendar'" class="calendar-view">
           <div class="mini-calendar" style="margin-bottom: 20px;">
             <div class="mc-header">
-              <button class="icon-btn small" @click="calPrevMonth"><i data-lucide="chevron-left"></i></button>
+              <button class="icon-btn small" @click="calPrevMonth" aria-label="Предыдущий месяц"><i data-lucide="chevron-left"></i></button>
               <div class="calendar-title">{{ calendarTitle }}</div>
-              <button class="icon-btn small" @click="calNextMonth"><i data-lucide="chevron-right"></i></button>
+              <button class="icon-btn small" @click="calNextMonth" aria-label="Следующий месяц"><i data-lucide="chevron-right"></i></button>
             </div>
             <div class="mc-grid">
               <div class="mc-day muted" v-for="d in ['Пн','Вт','Ср','Чт','Пт','Сб','Вс']">{{d}}</div>
@@ -208,7 +208,7 @@
     <div class="overlay" v-if="settingsOpen" style="z-index: 60;">
       <!-- ... reusing existing settings structure but Vue-ified ... -->
       <div class="overlay-header">
-        <button class="icon-btn" @click="settingsOpen = false"><i data-lucide="x"></i></button>
+        <button class="icon-btn" @click="settingsOpen = false" aria-label="Закрыть"><i data-lucide="x"></i></button>
         <div class="overlay-title">Настройки</div>
         <div style="width: 40px"></div>
       </div>
@@ -274,9 +274,9 @@
     <!-- Archive Overlay -->
     <div class="overlay" v-if="archiveOpen" style="z-index: 61;">
       <div class="overlay-header">
-        <button class="icon-btn" @click="archiveOpen = false"><i data-lucide="arrow-left"></i></button>
+        <button class="icon-btn" @click="archiveOpen = false" aria-label="Назад"><i data-lucide="arrow-left"></i></button>
         <div class="overlay-title">Архив</div>
-        <button class="icon-btn danger" @click="clearArchive" v-if="archiveTasks.length > 0">
+        <button class="icon-btn danger" @click="clearArchive" v-if="archiveTasks.length > 0" aria-label="Очистить архив">
           <i data-lucide="trash-2"></i>
         </button>
         <div style="width: 40px" v-else></div>
