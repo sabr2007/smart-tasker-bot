@@ -118,6 +118,17 @@ async def init_db():
 
         # Legacy TZ normalization migration removed - data is now stored in UTC
 
+        # --- Index Optimizations ---
+        # idx_tasks_user_status: Optimizes get_tasks (most frequent user query)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON tasks(user_id, status)"
+        )
+        # idx_tasks_status_remind: Optimizes background polling (get_active_tasks_with_future_remind)
+        # Removed as it caused regression in polling performance due to high cardinality of remind_at
+        # await conn.execute(
+        #     "CREATE INDEX IF NOT EXISTS idx_tasks_status_remind ON tasks(status, remind_at)"
+        # )
+
         await conn.commit()
 
 
