@@ -181,14 +181,20 @@ def _has_explicit_time_part(s: str) -> bool:
 
 def normalize_deadline_iso(deadline_iso: str | None) -> str | None:
     """
-    Центральная нормализация дедлайна:
-    - Парсит ISO (поддерживает суффикс Z).
-    - Нормализует/принудительно выставляет фиксированный offset +05:00.
-    - ВАЖНО ДЛЯ UX: сохраняем ЛОКАЛЬНОЕ время как намерение пользователя:
-      если вход был +06:00 (или любой другой offset) — мы НЕ делаем сдвиг часов,
-      а просто заменяем offset на +05:00.
-    - Если времени не было (только дата) — ставим 23:59.
+    DEPRECATED: Use normalize_deadline_to_utc(deadline_iso, tz_name) instead.
+    
+    This function incorrectly uses replace(tzinfo=...) instead of astimezone(),
+    which can cause timezone conversion bugs.
+    
+    Kept for backward compatibility only.
     """
+    import warnings
+    warnings.warn(
+        "normalize_deadline_iso is deprecated. Use normalize_deadline_to_utc instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     if deadline_iso is None:
         return None
     if not isinstance(deadline_iso, str):
@@ -211,9 +217,7 @@ def normalize_deadline_iso(deadline_iso: str | None) -> str | None:
     if not _has_explicit_time_part(s):
         dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    # Если TZ нет — считаем локальной (default timezone).
-    # Если TZ есть, но она другая — для UX трактуем как локальное время пользователя
-    # и просто заменяем offset без сдвига часов.
+    # Legacy behavior: just replace tzinfo without conversion
     dt = dt.replace(tzinfo=get_tz(DEFAULT_TIMEZONE))
     return dt.isoformat()
 
@@ -405,17 +409,29 @@ def compute_remind_at_from_offset(due_iso: str, offset_min: int) -> str | None:
     """
     Считает remind_at = due_at - offset_min (в минутах).
     Если получилось в прошлом — напомним "почти сразу" (через ~10 секунд).
-    Возвращает ISO в фиксированной TZ (+05:00) или None.
+    
+    Expects due_iso in UTC format (with 'Z' suffix or +00:00).
+    Returns ISO in UTC format with 'Z' suffix.
     """
+    if not due_iso:
+        return None
+    
     try:
-        due_dt = parse_deadline_iso(due_iso)
-        if not due_dt:
-            return None
-        now = now_local()
+        s = due_iso.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        
+        due_dt = datetime.fromisoformat(s)
+        if due_dt.tzinfo is None:
+            due_dt = due_dt.replace(tzinfo=UTC)
+        
+        now = now_utc()
         remind_dt = due_dt - timedelta(minutes=max(int(offset_min), 0))
         if remind_dt <= now:
             remind_dt = now + timedelta(seconds=10)
-        return normalize_deadline_iso(remind_dt.isoformat())
+        
+        # Return in UTC with Z suffix
+        return remind_dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
     except Exception:
         return None
 

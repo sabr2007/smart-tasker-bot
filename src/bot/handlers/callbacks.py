@@ -20,8 +20,8 @@ from bot.keyboards import snooze_choice_keyboard, reminder_choice_keyboard
 from bot.services import send_tasks_list
 from time_utils import (
     compute_remind_at_from_offset,
-    normalize_deadline_iso,
-    now_local,
+    normalize_deadline_to_utc,
+    now_in_tz,
 )
 
 
@@ -218,12 +218,14 @@ async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat_id if query.message else user_id
 
-    now = now_local()
+    # Get user timezone for proper conversion
+    user_timezone = await db.get_user_timezone(user_id)
+    now = now_in_tz(user_timezone)
     dt = now + timedelta(minutes=max(minutes, 0))
     # Import MAIN_KEYBOARD locally if needed or from bot.keyboards
     from bot.keyboards import MAIN_KEYBOARD
     
-    remind_iso = normalize_deadline_iso(dt.isoformat())
+    remind_iso = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
 
     _remind_at, offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
     cancel_task_reminder(task_id, context)

@@ -53,13 +53,20 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         tid = 0
 
-    # Ensure task is still active (avoid race conditions with WebApp)
+    # Ensure task is still active and remind_at matches (avoid race conditions with WebApp)
     if tid > 0:
         async with db.get_connection() as conn:
             task_row = await db._fetch_task_row(conn, chat_id, tid)
         
         if not task_row or task_row.get("status") != "active":
             logger.info(f"Skipping reminder for task {tid}: task is not active or deleted.")
+            return
+        
+        # Check if task was rescheduled via WebApp (remind_at changed)
+        scheduled_remind_at = data.get("scheduled_remind_at")
+        current_remind_at = task_row.get("remind_at")
+        if scheduled_remind_at and current_remind_at and scheduled_remind_at != current_remind_at:
+            logger.info(f"Skipping reminder for task {tid}: remind_at changed from {scheduled_remind_at} to {current_remind_at}")
             return
 
     await context.bot.send_message(
@@ -122,7 +129,11 @@ def schedule_task_reminder(
         when=timedelta(seconds=delay),
         chat_id=chat_id,
         name=f"reminder:{task_id}",
-        data={"task_id": task_id, "text": task_text},
+        data={
+            "task_id": task_id,
+            "text": task_text,
+            "scheduled_remind_at": when_iso,  # For versioning - compare with DB before sending
+        },
     )
 
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 import db
-from time_utils import compute_remind_at_from_offset, normalize_deadline_iso
+from time_utils import compute_remind_at_from_offset, normalize_deadline_to_utc
 from web.deps import get_current_user
 
 
@@ -103,7 +103,9 @@ async def create_task(payload: TaskCreateIn, user=Depends(get_current_user)):
     if not text:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Пустой текст задачи")
 
-    due_norm = normalize_deadline_iso(payload.deadline_iso)
+    # Get user timezone for proper conversion
+    user_timezone = await db.get_user_timezone(user_id)
+    due_norm = normalize_deadline_to_utc(payload.deadline_iso, user_timezone)
     task_id = await db.add_task(user_id, text, due_norm)
     row = await db.get_task(user_id, task_id)
     if not row:
@@ -136,7 +138,9 @@ async def patch_task(task_id: int, payload: TaskPatchIn, user=Depends(get_curren
         await db.update_task_text(user_id, task_id, new_text)
 
     if "deadline_iso" in fields:
-        new_due = normalize_deadline_iso(payload.deadline_iso)
+        # Get user timezone for proper conversion
+        user_timezone = await db.get_user_timezone(user_id)
+        new_due = normalize_deadline_to_utc(payload.deadline_iso, user_timezone)
         await db.update_task_due(user_id, task_id, new_due)
 
         if not new_due:

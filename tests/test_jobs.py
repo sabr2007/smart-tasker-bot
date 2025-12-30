@@ -83,3 +83,35 @@ async def test_send_task_reminder_skipped_not_found():
             await send_task_reminder(context)
 
             context.bot.send_message.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_send_task_reminder_skipped_rescheduled():
+    """Test that reminder is skipped if task was rescheduled (remind_at changed)."""
+    context = MagicMock()
+    context.job.data = {
+        "task_id": 123, 
+        "text": "Test Task",
+        "scheduled_remind_at": "2025-01-01T10:00:00Z"  # Original schedule
+    }
+    context.job.chat_id = 456
+    context.bot.send_message = AsyncMock()
+
+    mock_conn = AsyncMock()
+    mock_conn_ctx = AsyncMock()
+    mock_conn_ctx.__aenter__.return_value = mock_conn
+    mock_conn_ctx.__aexit__.return_value = None
+
+    with patch('db.get_connection', return_value=mock_conn_ctx):
+        with patch('db._fetch_task_row', new_callable=AsyncMock) as mock_fetch:
+            # Task is active but remind_at changed (rescheduled via WebApp)
+            mock_fetch.return_value = {
+                "status": "active", 
+                "text": "Test Task",
+                "remind_at": "2025-01-02T15:00:00Z"  # Changed via WebApp
+            }
+            
+            await send_task_reminder(context)
+
+            mock_fetch.assert_awaited_once_with(mock_conn, 456, 123)
+            # Should NOT send message because remind_at changed
+            context.bot.send_message.assert_not_called()

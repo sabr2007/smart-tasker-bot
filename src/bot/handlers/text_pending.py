@@ -14,8 +14,8 @@ from bot.keyboards import MAIN_KEYBOARD, reminder_compact_keyboard
 from bot.utils import format_deadline_human_local, is_deadline_like
 from time_utils import (
     compute_remind_at_from_offset,
-    normalize_deadline_iso,
-    now_local,
+    normalize_deadline_to_utc,
+    now_in_tz,
     parse_datetime_from_text,
     parse_delay_minutes,
     parse_offset_minutes,
@@ -85,8 +85,11 @@ async def handle_pending_deadline(
         context.user_data.pop("pending_deadline", None)
         return False  # Let the main handler create new task
 
+    # Get user timezone for proper conversion
+    user_timezone = await db.get_user_timezone(user_id)
+    
     # Try to parse as delay or datetime
-    now = now_local()
+    now = now_in_tz(user_timezone)
     delay_min = parse_delay_minutes(text)
     dt = None
     if delay_min is not None:
@@ -95,7 +98,7 @@ async def handle_pending_deadline(
         dt = parse_datetime_from_text(text, now=now, base_date=now.date())
 
     if dt:
-        new_due = normalize_deadline_iso(dt.isoformat())
+        new_due = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
         await db.update_task_due(user_id, task_id, new_due)
 
         # Set reminder (smart default: 15 min)
@@ -158,7 +161,9 @@ async def handle_pending_reschedule(
         await update.message.reply_text("Ок, не переносим.", reply_markup=MAIN_KEYBOARD)
         return True
 
-    now = now_local()
+    # Get user timezone for proper conversion
+    user_timezone = await db.get_user_timezone(user_id)
+    now = now_in_tz(user_timezone)
     delay_min = parse_delay_minutes(text)
     dt = None
     if delay_min is not None:
@@ -167,7 +172,7 @@ async def handle_pending_reschedule(
         dt = parse_datetime_from_text(text, now=now, base_date=now.date())
 
     if dt:
-        new_due = normalize_deadline_iso(dt.isoformat())
+        new_due = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
         cancel_task_reminder(task_id, context)
         await db.update_task_due(user_id, task_id, new_due)
 
@@ -310,8 +315,10 @@ async def handle_pending_snooze(
         context.user_data.pop("pending_snooze", None)
         return False
     else:
+        # Get user timezone for proper conversion
+        user_timezone = await db.get_user_timezone(user_id)
         _remind_at, offset_min, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
-        remind_iso = normalize_deadline_iso(dt.isoformat())
+        remind_iso = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
         cancel_task_reminder(task_id, context)
         await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
         schedule_task_reminder(
