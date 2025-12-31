@@ -52,6 +52,7 @@ from bot.handlers.text_actions import (
 from llm_client import parse_user_input
 from task_schema import TaskInterpretation
 from time_utils import now_local, now_in_tz, parse_deadline_iso
+from bot.rate_limiter import check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_pending_reminder_choice(update, context, user_id, chat_id, text):
         return
     if await handle_pending_snooze(update, context, user_id, chat_id, text):
+        return
+
+    # --- 1.5. Rate limit check (before AI calls) ---
+    is_allowed, wait_seconds = check_rate_limit(user_id)
+    if not is_allowed:
+        await update.message.reply_text(
+            f"⏳ Слишком много запросов. Подожди {wait_seconds} сек.",
+            reply_markup=MAIN_KEYBOARD,
+        )
         return
 
     # --- 2. AI parsing ---

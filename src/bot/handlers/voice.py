@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 
 from bot.constants import ENABLE_VOICE_AUTO_HANDLE
 from bot.keyboards import MAIN_KEYBOARD
+from bot.rate_limiter import check_rate_limit
 from llm_client import transcribe_audio
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,16 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     voice = update.message.voice
+
+    # Rate limit check before Whisper API call
+    is_allowed, wait_seconds = check_rate_limit(user_id)
+    if not is_allowed:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Слишком много запросов. Подожди {wait_seconds} сек.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
 
     temp_path = None
     try:
