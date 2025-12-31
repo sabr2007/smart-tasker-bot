@@ -294,7 +294,8 @@ async def handle_pending_snooze(
         await update.message.reply_text("Ок.", reply_markup=MAIN_KEYBOARD)
         return True
 
-    now = now_local()
+    user_timezone = await db.get_user_timezone(user_id)
+    now = now_in_tz(user_timezone)
     delay_min = parse_delay_minutes(text)
     if delay_min is None:
         delay_min = parse_offset_minutes(text)
@@ -315,8 +316,7 @@ async def handle_pending_snooze(
         context.user_data.pop("pending_snooze", None)
         return False
     else:
-        # Get user timezone for proper conversion
-        user_timezone = await db.get_user_timezone(user_id)
+        # User timezone is already fetched
         _remind_at, offset_min, due_at, task_text_db = await db.get_task_reminder_settings(user_id, task_id)
         remind_iso = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
         cancel_task_reminder(task_id, context)
