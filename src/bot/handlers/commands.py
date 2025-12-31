@@ -10,7 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import db
-from bot.constants import ADMIN_USER_ID
+from config import ADMIN_USER_ID
 from bot.keyboards import MAIN_KEYBOARD
 
 logger = logging.getLogger(__name__)
