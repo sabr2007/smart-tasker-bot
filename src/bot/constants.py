@@ -4,7 +4,7 @@
 from time_utils import LOCAL_TZ
 
 # ===== CORE CONSTANTS =====
-ADMIN_USER_ID = 6113692933
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 
 # Флаг: автоматом обрабатываем голос (True) или только показываем, что услышали (False)
 ENABLE_VOICE_AUTO_HANDLE = True
