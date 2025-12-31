@@ -67,7 +67,8 @@ def main():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # 2. Инициализируем БД
+            # 2. Инициализируем пул соединений PostgreSQL и БД
+            loop.run_until_complete(db.init_pool())
             loop.run_until_complete(db.init_db())
 
             # 3. Строим приложение
@@ -123,7 +124,9 @@ def main():
             time.sleep(10)
         finally:
             try:
+                # Закрываем пул соединений PostgreSQL
                 if 'loop' in locals() and not loop.is_closed():
+                    loop.run_until_complete(db.close_pool())
                     loop.close()
             except Exception:
                 pass

@@ -1,74 +1,83 @@
 # src/db.py
+# PostgreSQL version using asyncpg
 
 import json
 import os
-from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import aiosqlite
+import asyncpg
 
 from time_utils import now_local_iso
 
-DB_PATH = os.getenv("DB_PATH")
-if not DB_PATH:
-    # По умолчанию используем tasks.db рядом с исходниками (src/tasks.db),
-    # чтобы бот и WebApp гарантированно смотрели в один и тот же файл вне зависимости от cwd.
-    DB_PATH = str((Path(__file__).resolve().parent / "tasks.db"))
+# Database URL from Railway (e.g. postgresql://user:pass@host:port/dbname)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Connection pool (initialized on startup)
+_pool: Optional[asyncpg.Pool] = None
+
+
+async def init_pool():
+    """Initialize the connection pool. Call this on application startup."""
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=2,
+            max_size=10,
+            command_timeout=60,
+        )
+
+
+async def close_pool():
+    """Close the connection pool. Call this on application shutdown."""
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
 
 
 @asynccontextmanager
 async def get_connection():
-    """Создаёт асинхронное подключение к SQLite (aiosqlite)."""
-    conn = await aiosqlite.connect(DB_PATH, timeout=30)
-    try:
-        # Чуть лучше поведение при конкурирующих чтениях/записях.
-        try:
-            await conn.execute("PRAGMA journal_mode=WAL")
-        except Exception:
-            pass
-        try:
-            await conn.execute("PRAGMA foreign_keys=ON")
-        except Exception:
-            pass
-        try:
-            await conn.execute("PRAGMA busy_timeout=30000")
-        except Exception:
-            pass
+    """Acquire a connection from the pool."""
+    global _pool
+    if _pool is None:
+        await init_pool()
+    async with _pool.acquire() as conn:
         yield conn
-    finally:
-        await conn.close()
 
 
 async def init_db():
     """
-    Создаёт таблицы tasks/events/tasks_history, если они не существуют.
-    Проводит миграции (добавляет колонки), если база старая.
+    Creates tables (tasks, events, tasks_history, users) if they do not exist.
+    Also runs migrations for any missing columns.
     """
     async with get_connection() as conn:
+        # Create tasks table
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 text TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 due_at TEXT,
-                remind_at TEXT,            -- следующее запланированное напоминание (ISO)
-                remind_offset_min INTEGER, -- предпочтение "за сколько" (минут) относительно due_at; null если задано абсолютное remind_at
+                remind_at TEXT,
+                remind_offset_min INTEGER,
                 notified INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'active',
                 completed_at TEXT,
-                category TEXT  -- Новое поле для категорий (на будущее)
+                category TEXT
             )
             """
         )
 
+        # Create events table
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 event_type TEXT NOT NULL,
                 task_id INTEGER,
                 meta TEXT,
@@ -77,12 +86,13 @@ async def init_db():
             """
         )
 
+        # Create tasks_history table
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 task_id INTEGER,
-                user_id INTEGER NOT NULL,
+                user_id BIGINT NOT NULL,
                 text TEXT NOT NULL,
                 due_at TEXT,
                 status TEXT,
@@ -97,28 +107,42 @@ async def init_db():
             """
         )
 
-        # --- Миграции (на случай старой базы) ---
-        async with conn.execute("PRAGMA table_info(tasks)") as cur:
-            columns = [row[1] for row in await cur.fetchall()]
+        # Create users table
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                timezone TEXT DEFAULT 'Asia/Almaty',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
-        if "due_at" not in columns:
+        # --- Migrations (add missing columns) ---
+        # Get existing columns for tasks table
+        columns = await conn.fetch(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'tasks'
+            """
+        )
+        existing_cols = {row["column_name"] for row in columns}
+
+        if "due_at" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN due_at TEXT")
-        if "notified" not in columns:
+        if "notified" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN notified INTEGER DEFAULT 0")
-        if "status" not in columns:
+        if "status" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'active'")
-        if "completed_at" not in columns:
+        if "completed_at" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
-        if "category" not in columns:
+        if "category" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT")
-        if "remind_at" not in columns:
+        if "remind_at" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN remind_at TEXT")
-        if "remind_offset_min" not in columns:
+        if "remind_offset_min" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN remind_offset_min INTEGER")
-
-        # Legacy TZ normalization migration removed - data is now stored in UTC
-
-        await conn.commit()
 
 
 # ======== USER SETTINGS (Timezone) ========
@@ -126,52 +150,31 @@ async def init_db():
 DEFAULT_TIMEZONE = "Asia/Almaty"
 
 
-async def _ensure_users_table():
-    """Creates users table if not exists."""
-    async with get_connection() as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                timezone TEXT DEFAULT 'Asia/Almaty',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        await conn.commit()
-
-
 async def get_user_timezone(user_id: int) -> str:
     """Returns IANA timezone string for user, or default if not set."""
-    await _ensure_users_table()
     async with get_connection() as conn:
-        async with conn.execute(
-            "SELECT timezone FROM users WHERE user_id = ?",
-            (user_id,),
-        ) as cur:
-            row = await cur.fetchone()
-    if row and row[0]:
-        return row[0]
+        row = await conn.fetchrow(
+            "SELECT timezone FROM users WHERE user_id = $1",
+            user_id,
+        )
+    if row and row["timezone"]:
+        return row["timezone"]
     return DEFAULT_TIMEZONE
 
 
 async def set_user_timezone(user_id: int, tz: str) -> None:
     """Creates or updates user timezone setting."""
-    await _ensure_users_table()
     async with get_connection() as conn:
-        # Upsert: INSERT OR REPLACE
         await conn.execute(
             """
             INSERT INTO users (user_id, timezone, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id) DO UPDATE SET
-                timezone = excluded.timezone,
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                timezone = EXCLUDED.timezone,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (user_id, tz),
+            user_id, tz,
         )
-        await conn.commit()
 
 
 async def get_user_settings(user_id: int) -> dict:
@@ -186,89 +189,79 @@ async def add_task(
     due_at_iso: Optional[str] = None,
     category: Optional[str] = None,
 ) -> int:
-    """Добавляет задачу и возвращает её ID."""
-    # Note: due_at_iso should already be in UTC format when coming from handlers
+    """Adds a task and returns its ID."""
     remind_at_iso = due_at_iso if due_at_iso else None
     remind_offset_min = 0 if due_at_iso else None
     async with get_connection() as conn:
-        cur = await conn.execute(
-            "INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category),
+        row = await conn.fetchrow(
+            """
+            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+            """,
+            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category,
         )
-        await conn.commit()
-        return int(cur.lastrowid)
+        return int(row["id"])
 
 
 async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str]]]:
     """
-    Возвращает список активных задач: (id, text, due_at).
-    Сортировка: сначала с дедлайнами (по возрастанию), потом остальные.
+    Returns list of active tasks: (id, text, due_at).
+    Sorted: tasks with deadlines first (ascending), then others.
     """
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, text, due_at
             FROM tasks
-            WHERE user_id = ?
+            WHERE user_id = $1
               AND (status IS NULL OR status = 'active')
             ORDER BY
                 CASE WHEN due_at IS NULL THEN 1 ELSE 0 END,
                 due_at ASC,
                 id DESC
             """,
-            (user_id,),
-        ) as cur:
-            rows = await cur.fetchall()
-            return rows
+            user_id,
+        )
+        return [(row["id"], row["text"], row["due_at"]) for row in rows]
 
 
 async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str]]]:
-    """Возвращает одну задачу (id, text, due_at) или None."""
+    """Returns one task (id, text, due_at) or None."""
     async with get_connection() as conn:
-        async with conn.execute(
-            "SELECT id, text, due_at FROM tasks WHERE id = ? AND user_id = ?",
-            (task_id, user_id),
-        ) as cur:
-            return await cur.fetchone()
+        row = await conn.fetchrow(
+            "SELECT id, text, due_at FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user_id,
+        )
+    if not row:
+        return None
+    return (row["id"], row["text"], row["due_at"])
 
 
-async def _fetch_task_row(conn: aiosqlite.Connection, user_id: int, task_id: int) -> Optional[dict]:
-    """Возвращает полную строку задачи (dict) или None."""
-    async with conn.execute(
+async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) -> Optional[dict]:
+    """Returns full task row (dict) or None."""
+    row = await conn.fetchrow(
         """
         SELECT id, user_id, text, created_at, due_at, remind_at, remind_offset_min, status, completed_at, category
         FROM tasks
-        WHERE id = ? AND user_id = ?
+        WHERE id = $1 AND user_id = $2
         """,
-        (task_id, user_id),
-    ) as cur:
-        row = await cur.fetchone()
+        task_id, user_id,
+    )
     if not row:
         return None
 
-    (
-        tid,
-        uid,
-        text,
-        created_at,
-        due_at,
-        remind_at,
-        remind_offset_min,
-        status,
-        completed_at,
-        category,
-    ) = row
     return {
-        "task_id": tid,
-        "user_id": uid,
-        "text": text,
-        "created_at": created_at,
-        "due_at": due_at,
-        "remind_at": remind_at,
-        "remind_offset_min": remind_offset_min,
-        "status": status,
-        "completed_at": completed_at,
-        "category": category,
+        "task_id": row["id"],
+        "user_id": row["user_id"],
+        "text": row["text"],
+        "created_at": row["created_at"],
+        "due_at": row["due_at"],
+        "remind_at": row["remind_at"],
+        "remind_offset_min": row["remind_offset_min"],
+        "status": row["status"],
+        "completed_at": row["completed_at"],
+        "category": row["category"],
         "source": None,
     }
 
@@ -278,19 +271,17 @@ async def get_task_reminder_settings(
     task_id: int,
 ) -> tuple[Optional[str], Optional[int], Optional[str], Optional[str]]:
     """
-    Возвращает (remind_at, remind_offset_min, due_at, text) для задачи
-    или (None, None, None, None), если не найдена.
+    Returns (remind_at, remind_offset_min, due_at, text) for a task
+    or (None, None, None, None) if not found.
     """
     async with get_connection() as conn:
-        async with conn.execute(
-            "SELECT remind_at, remind_offset_min, due_at, text FROM tasks WHERE id = ? AND user_id = ?",
-            (task_id, user_id),
-        ) as cur:
-            row = await cur.fetchone()
+        row = await conn.fetchrow(
+            "SELECT remind_at, remind_offset_min, due_at, text FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user_id,
+        )
     if not row:
         return None, None, None, None
-    remind_at, remind_offset_min, due_at, text = row
-    return remind_at, remind_offset_min, due_at, text
+    return row["remind_at"], row["remind_offset_min"], row["due_at"], row["text"]
 
 
 async def update_task_reminder_settings(
@@ -301,29 +292,27 @@ async def update_task_reminder_settings(
     remind_offset_min: Optional[int],
 ) -> None:
     """
-    Обновляет настройки напоминания у задачи.
-    - remind_at_iso: следующее напоминание (ISO) или None (не напоминать)
-    - remind_offset_min: предпочтение "за сколько" в минутах (0/5/30/60/...), или None если remind_at задан как абсолютное время
+    Updates reminder settings for a task.
+    - remind_at_iso: next reminder (ISO) or None (no reminder)
+    - remind_offset_min: how many minutes before (0/5/30/60/...), or None if absolute time
     """
-    # Note: remind_at_iso should already be normalized before reaching here
     async with get_connection() as conn:
         await conn.execute(
-            "UPDATE tasks SET remind_at = ?, remind_offset_min = ? WHERE id = ? AND user_id = ?",
-            (remind_at_iso, remind_offset_min, task_id, user_id),
+            "UPDATE tasks SET remind_at = $1, remind_offset_min = $2 WHERE id = $3 AND user_id = $4",
+            remind_at_iso, remind_offset_min, task_id, user_id,
         )
-        await conn.commit()
 
 
 async def _archive_task_snapshot(
-    conn: aiosqlite.Connection,
+    conn: asyncpg.Connection,
     task_row: Optional[dict],
     reason: str,
     *,
     deleted_at: Optional[str] = None,
 ) -> None:
     """
-    Сохраняет копию задачи в аналитический архив.
-    Не влияет на пользовательский интерфейс.
+    Saves a copy of the task to the analytics archive.
+    Does not affect the user interface.
     """
     if not task_row:
         return
@@ -334,47 +323,42 @@ async def _archive_task_snapshot(
             task_id, user_id, text, due_at, status, created_at,
             completed_at, deleted_at, category, source, reason
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         """,
-        (
-            task_row.get("task_id"),
-            task_row.get("user_id"),
-            task_row.get("text"),
-            task_row.get("due_at"),
-            task_row.get("status"),
-            task_row.get("created_at"),
-            task_row.get("completed_at"),
-            deleted_at or task_row.get("deleted_at"),
-            task_row.get("category"),
-            task_row.get("source"),
-            reason,
-        ),
+        task_row.get("task_id"),
+        task_row.get("user_id"),
+        task_row.get("text"),
+        task_row.get("due_at"),
+        task_row.get("status"),
+        str(task_row.get("created_at")) if task_row.get("created_at") else None,
+        task_row.get("completed_at"),
+        deleted_at or task_row.get("deleted_at"),
+        task_row.get("category"),
+        task_row.get("source"),
+        reason,
     )
 
 
 async def update_task_due(user_id: int, task_id: int, due_at_iso: Optional[str]):
-    """Обновляет дедлайн задачи."""
-    # Note: due_at_iso should already be normalized before reaching here
+    """Updates the task's deadline."""
     async with get_connection() as conn:
         await conn.execute(
-            "UPDATE tasks SET due_at = ? WHERE id = ? AND user_id = ?",
-            (due_at_iso, task_id, user_id),
+            "UPDATE tasks SET due_at = $1 WHERE id = $2 AND user_id = $3",
+            due_at_iso, task_id, user_id,
         )
-        await conn.commit()
 
 
 async def update_task_text(user_id: int, task_id: int, new_text: str):
-    """Обновляет текст задачи."""
+    """Updates the task's text."""
     async with get_connection() as conn:
         await conn.execute(
-            "UPDATE tasks SET text = ? WHERE id = ? AND user_id = ?",
-            (new_text, task_id, user_id),
+            "UPDATE tasks SET text = $1 WHERE id = $2 AND user_id = $3",
+            new_text, task_id, user_id,
         )
-        await conn.commit()
 
 
 async def delete_task(user_id: int, task_id: int):
-    """Удаляет задачу (физически) + пишет снимок в tasks_history."""
+    """Deletes a task (physically) and writes snapshot to tasks_history."""
     deleted_at_iso = now_local_iso()
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
@@ -383,14 +367,13 @@ async def delete_task(user_id: int, task_id: int):
             await _archive_task_snapshot(conn, task_row, reason="deleted", deleted_at=deleted_at_iso)
 
         await conn.execute(
-            "DELETE FROM tasks WHERE id = ? AND user_id = ?",
-            (task_id, user_id),
+            "DELETE FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user_id,
         )
-        await conn.commit()
 
 
 async def set_task_done(user_id: int, task_id: int):
-    """Помечает задачу выполненной (status='done') + пишет снимок в tasks_history."""
+    """Marks task as completed (status='done') and writes snapshot to tasks_history."""
     now_iso = now_local_iso()
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
@@ -398,10 +381,10 @@ async def set_task_done(user_id: int, task_id: int):
         await conn.execute(
             """
             UPDATE tasks
-            SET status = 'done', completed_at = ?
-            WHERE id = ? AND user_id = ?
+            SET status = 'done', completed_at = $1
+            WHERE id = $2 AND user_id = $3
             """,
-            (now_iso, task_id, user_id),
+            now_iso, task_id, user_id,
         )
 
         if task_row:
@@ -409,11 +392,9 @@ async def set_task_done(user_id: int, task_id: int):
             task_row["completed_at"] = now_iso
             await _archive_task_snapshot(conn, task_row, reason="completed")
 
-        await conn.commit()
-
 
 async def set_task_active(user_id: int, task_id: int):
-    """Возвращает задачу в активное состояние (status='active', completed_at=NULL)."""
+    """Returns task to active state (status='active', completed_at=NULL)."""
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
 
@@ -421,109 +402,94 @@ async def set_task_active(user_id: int, task_id: int):
             """
             UPDATE tasks
             SET status = 'active', completed_at = NULL
-            WHERE id = ? AND user_id = ?
+            WHERE id = $1 AND user_id = $2
             """,
-            (task_id, user_id),
+            task_id, user_id,
         )
 
         if task_row:
             task_row["status"] = "active"
             await _archive_task_snapshot(conn, task_row, reason="reopened")
 
-        await conn.commit()
-
 
 async def set_task_archived(user_id: int, task_id: int):
-    """Помечает задачу как архивную (status='archived')."""
+    """Marks task as archived (status='archived')."""
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
 
         await conn.execute(
-            "UPDATE tasks SET status = 'archived' WHERE id = ? AND user_id = ?",
-            (task_id, user_id),
+            "UPDATE tasks SET status = 'archived' WHERE id = $1 AND user_id = $2",
+            task_id, user_id,
         )
 
         if task_row:
             task_row["status"] = "archived"
             await _archive_task_snapshot(conn, task_row, reason="archived")
 
-        await conn.commit()
-
 
 async def get_archived_tasks(
     user_id: int,
     limit: int = 10,
 ) -> list[tuple[int, str, Optional[str], Optional[str]]]:
-    """Возвращает последние выполненные задачи."""
+    """Returns last completed tasks."""
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, text, due_at, completed_at
             FROM tasks
-            WHERE user_id = ? AND status = 'archived'
+            WHERE user_id = $1 AND status = 'archived'
             ORDER BY completed_at DESC
-            LIMIT ?
+            LIMIT $2
             """,
-            (user_id, limit),
-        ) as cur:
-            return await cur.fetchall()
+            user_id, limit,
+        )
+        return [(row["id"], row["text"], row["due_at"], row["completed_at"]) for row in rows]
 
 
 async def get_completed_tasks_since(
     user_id: int,
     since_iso: str,
 ) -> list[tuple[int, str, Optional[str], Optional[str]]]:
-    """Возвращает задачи, выполненные после указанного времени (ISO)."""
+    """Returns tasks completed since the specified time (ISO)."""
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, text, due_at, completed_at
             FROM tasks
-            WHERE user_id = ? 
+            WHERE user_id = $1 
               AND status = 'done'
-              AND completed_at >= ?
+              AND completed_at >= $2
             ORDER BY completed_at DESC
             """,
-            (user_id, since_iso),
-        ) as cur:
-            return await cur.fetchall()
+            user_id, since_iso,
+        )
+        return [(row["id"], row["text"], row["due_at"], row["completed_at"]) for row in rows]
 
 
 async def clear_archived_tasks(user_id: int) -> None:
-    """Очищает архив выполненных задач пользователя + пишет снимки в tasks_history."""
+    """Clears user's completed task archive and writes snapshots to tasks_history."""
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, user_id, text, created_at, due_at, status, completed_at, category
             FROM tasks
-            WHERE user_id = ? AND status = 'done'
+            WHERE user_id = $1 AND status = 'done'
             """,
-            (user_id,),
-        ) as cur:
-            rows = await cur.fetchall()
+            user_id,
+        )
 
         if rows:
             deleted_at_iso = now_local_iso()
             for row in rows:
-                (
-                    tid,
-                    uid,
-                    text,
-                    created_at,
-                    due_at,
-                    status,
-                    completed_at,
-                    category,
-                ) = row
                 snapshot = {
-                    "task_id": tid,
-                    "user_id": uid,
-                    "text": text,
-                    "created_at": created_at,
-                    "due_at": due_at,
-                    "status": status,
-                    "completed_at": completed_at,
-                    "category": category,
+                    "task_id": row["id"],
+                    "user_id": row["user_id"],
+                    "text": row["text"],
+                    "created_at": row["created_at"],
+                    "due_at": row["due_at"],
+                    "status": row["status"],
+                    "completed_at": row["completed_at"],
+                    "category": row["category"],
                     "source": None,
                 }
                 await _archive_task_snapshot(
@@ -534,10 +500,9 @@ async def clear_archived_tasks(user_id: int) -> None:
                 )
 
         await conn.execute(
-            "DELETE FROM tasks WHERE user_id = ? AND status = 'done'",
-            (user_id,),
+            "DELETE FROM tasks WHERE user_id = $1 AND status = 'done'",
+            user_id,
         )
-        await conn.commit()
 
 
 async def log_event(
@@ -546,90 +511,90 @@ async def log_event(
     task_id: Optional[int] = None,
     meta: Optional[dict] = None,
 ):
-    """Пишет лог события."""
+    """Logs an event."""
     meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
     async with get_connection() as conn:
         await conn.execute(
             """
             INSERT INTO events (user_id, event_type, task_id, meta)
-            VALUES (?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4)
             """,
-            (user_id, event_type, task_id, meta_json),
+            user_id, event_type, task_id, meta_json,
         )
-        await conn.commit()
 
 
 async def get_users_with_active_tasks() -> list[int]:
-    """Возвращает список user_id, у которых есть активные задачи."""
+    """Returns list of user_ids with active tasks."""
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT DISTINCT user_id
             FROM tasks
             WHERE status IS NULL OR status = 'active'
             """
-        ) as cur:
-            rows = await cur.fetchall()
-            return [row[0] for row in rows]
+        )
+        return [row["user_id"] for row in rows]
 
 
 async def get_active_tasks_with_future_due(now_iso: str):
     """
-    Возвращает активные задачи с дедлайном в будущем.
-    Используется для восстановления напоминаний после рестарта.
+    Returns active tasks with deadline in the future.
+    Used for restoring reminders after restart.
     """
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, user_id, text, due_at
             FROM tasks
             WHERE (status IS NULL OR status = 'active')
               AND due_at IS NOT NULL
-              AND due_at > ?
+              AND due_at > $1
             ORDER BY due_at ASC
             """,
-            (now_iso,),
-        ) as cur:
-            return await cur.fetchall()
+            now_iso,
+        )
+        return [(row["id"], row["user_id"], row["text"], row["due_at"]) for row in rows]
 
 
 async def get_active_tasks_with_future_remind(now_iso: str):
     """
-    Возвращает активные задачи с ближайшим напоминанием в будущем.
-    Формат: (id, user_id, text, due_at, remind_at, remind_offset_min)
+    Returns active tasks with upcoming reminder.
+    Format: (id, user_id, text, due_at, remind_at, remind_offset_min)
     """
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, user_id, text, due_at, remind_at, remind_offset_min
             FROM tasks
             WHERE (status IS NULL OR status = 'active')
               AND remind_at IS NOT NULL
-              AND remind_at > ?
+              AND remind_at > $1
             ORDER BY remind_at ASC
             """,
-            (now_iso,),
-        ) as cur:
-            return await cur.fetchall()
+            now_iso,
+        )
+        return [
+            (row["id"], row["user_id"], row["text"], row["due_at"], row["remind_at"], row["remind_offset_min"])
+            for row in rows
+        ]
 
 
 async def get_active_tasks_with_future_due_without_remind(now_iso: str):
     """
-    Fallback для старых/переходных задач: дедлайн в будущем, но remind_at не задан.
-    Формат: (id, user_id, text, due_at)
+    Fallback for old/transitional tasks: deadline in future, but remind_at not set.
+    Format: (id, user_id, text, due_at)
     """
     async with get_connection() as conn:
-        async with conn.execute(
+        rows = await conn.fetch(
             """
             SELECT id, user_id, text, due_at
             FROM tasks
             WHERE (status IS NULL OR status = 'active')
               AND due_at IS NOT NULL
-              AND due_at > ?
+              AND due_at > $1
               AND remind_at IS NULL
             ORDER BY due_at ASC
             """,
-            (now_iso,),
-        ) as cur:
-            return await cur.fetchall()
-
+            now_iso,
+        )
+        return [(row["id"], row["user_id"], row["text"], row["due_at"]) for row in rows]
