@@ -137,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_result = parse_user_input(text, tasks_snapshot=tasks_snapshot, user_timezone=user_timezone)
         except Exception as e:
             logger.exception("parse_user_input failed for user %s: %s", user_id, e)
-            await update.message.reply_text(f"🤯 Мозг сломался: {e}", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text("Простите, не могу обработать", reply_markup=MAIN_KEYBOARD)
             return
 
     logger.info("Parsed intent for user %s: %s", user_id, ai_result.model_dump())
