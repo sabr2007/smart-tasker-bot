@@ -32,7 +32,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 # --- Handlers ---
-from bot.jobs import send_daily_digest, restore_reminders_job
+from bot.jobs import send_daily_digest, restore_reminders_job, sync_reminders_job
 from bot.handlers.commands import cmd_start, cmd_dumpdb, cmd_broadcast
 from bot.handlers.agent_text import handle_agent_message, handle_agent_voice
 from bot.handlers.callbacks import (
@@ -118,6 +118,13 @@ def main():
                     name="daily_digest",
                 )
                 app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
+                # Periodic sync for WebApp changes (every 5 minutes)
+                app.job_queue.run_repeating(
+                    sync_reminders_job,
+                    interval=300,  # 5 minutes
+                    first=60,  # First run after 1 minute
+                    name="sync_reminders",
+                )
 
             # 5. Запускаем polling
             logging.info("Starting polling...")

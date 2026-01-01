@@ -192,3 +192,29 @@ async def restore_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.job_queue:
         return
     await restore_reminders(context.job_queue)
+
+
+async def sync_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Periodic job (every 5 min): syncs reminders from DB to job_queue.
+    Adds missing jobs for tasks with future remind_at (e.g., after WebApp changes).
+    """
+    job_queue = context.job_queue
+    if not job_queue:
+        return
+    
+    now_iso = now_utc().isoformat().replace("+00:00", "Z")
+    tasks = await db.get_active_tasks_with_future_remind(now_iso)
+    
+    for task_id, user_id, text, due_at, remind_at, _ in tasks:
+        job_name = f"reminder:{task_id}"
+        existing = job_queue.get_jobs_by_name(job_name)
+        
+        if not existing:
+            # No job exists - schedule new one
+            schedule_task_reminder(
+                job_queue, task_id, text,
+                deadline_iso=due_at, chat_id=user_id,
+                remind_at_iso=remind_at,
+            )
+            logger.info(f"Sync: scheduled reminder for task {task_id}")
