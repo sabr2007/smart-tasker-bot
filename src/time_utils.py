@@ -13,9 +13,6 @@ except ImportError:
 # ======== LEGACY: Fixed offset for backward compatibility ========
 # DEPRECATED: These are kept only for third-party code that might import them.
 # Internal code now uses get_tz(DEFAULT_TIMEZONE) for dynamic timezone resolution.
-FIXED_TZ = timezone(timedelta(hours=5), name="+05:00")  # DEPRECATED
-LOCAL_TZ = FIXED_TZ  # DEPRECATED alias
-
 # Default timezone for new users (IANA string)
 DEFAULT_TIMEZONE = "Asia/Almaty"
 
@@ -36,8 +33,8 @@ def get_tz(tz_name: str) -> ZoneInfo | timezone:
         try:
             return ZoneInfo(DEFAULT_TIMEZONE)
         except Exception:
-            # Ultimate fallback to fixed offset
-            return FIXED_TZ
+            # Ultimate fallback to UTC
+            return UTC
 
 
 def now_utc() -> datetime:
@@ -160,77 +157,10 @@ def get_tz_offset_str(tz_name: str) -> str:
 
 # ======== LEGACY FUNCTIONS (for backward compatibility) ========
 
-def now_local() -> datetime:
-    """Текущее время в дефолтной таймзоне.
-    
-    DEPRECATED: Use now_in_tz(tz_name) instead.
-    """
-    return datetime.now(get_tz(DEFAULT_TIMEZONE))
-
-
-def now_local_iso() -> str:
-    """DEPRECATED: Use now_utc().isoformat() instead."""
-    return now_local().isoformat()
-
-
 def _has_explicit_time_part(s: str) -> bool:
     # ISO "YYYY-MM-DD" => без времени.
     # Любое наличие "T" или пробела после даты => время присутствует.
     return ("T" in s) or (re.search(r"\d{4}-\d{2}-\d{2}\s+\d", s) is not None)
-
-
-def normalize_deadline_iso(deadline_iso: str | None) -> str | None:
-    """
-    DEPRECATED: Use normalize_deadline_to_utc(deadline_iso, tz_name) instead.
-    
-    This function incorrectly uses replace(tzinfo=...) instead of astimezone(),
-    which can cause timezone conversion bugs.
-    
-    Kept for backward compatibility only.
-    """
-    import warnings
-    warnings.warn(
-        "normalize_deadline_iso is deprecated. Use normalize_deadline_to_utc instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    
-    if deadline_iso is None:
-        return None
-    if not isinstance(deadline_iso, str):
-        return None
-
-    s = deadline_iso.strip()
-    if not s:
-        return None
-
-    # Поддержка "Z" (UTC)
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-
-    try:
-        dt = datetime.fromisoformat(s)
-    except Exception:
-        return None
-
-    # Если не было времени (только дата) — 23:59
-    if not _has_explicit_time_part(s):
-        dt = dt.replace(hour=23, minute=59, second=0, microsecond=0)
-
-    # Legacy behavior: just replace tzinfo without conversion
-    dt = dt.replace(tzinfo=get_tz(DEFAULT_TIMEZONE))
-    return dt.isoformat()
-
-
-def parse_deadline_iso(deadline_iso: str | None) -> Optional[datetime]:
-    """Парсит дедлайн после нормализации (удобно для сравнения/планирования)."""
-    norm = normalize_deadline_iso(deadline_iso)
-    if not norm:
-        return None
-    try:
-        return datetime.fromisoformat(norm)
-    except Exception:
-        return None
 
 
 _RU_MINUTE_WORDS = ("минута", "минуту", "минуты", "минут", "мин")

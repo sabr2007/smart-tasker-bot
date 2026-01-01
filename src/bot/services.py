@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 import db
 from bot.keyboards import MAIN_KEYBOARD
-from time_utils import now_local, now_utc, now_in_tz, parse_deadline_iso, format_deadline_in_tz, normalize_deadline_to_utc
+from time_utils import DEFAULT_TIMEZONE, now_utc, now_in_tz, format_deadline_in_tz, normalize_deadline_to_utc
 
 
 async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -23,7 +23,7 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
     tasks = await db.get_tasks(user_id)
     # Fetch user timezone for correct display
     user_timezone = await db.get_user_timezone(user_id)
-    now = now_in_tz(user_timezone) if user_timezone else now_local()
+    now = now_in_tz(user_timezone) if user_timezone else now_in_tz(DEFAULT_TIMEZONE)
 
     if not tasks:
         await context.bot.send_message(

@@ -20,7 +20,7 @@ from telegram.ext import (
 
 import db
 from config import TELEGRAM_BOT_TOKEN
-from time_utils import LOCAL_TZ
+from time_utils import get_tz, DEFAULT_TIMEZONE
 
 # Настройка логирования
 logging.basicConfig(
@@ -110,7 +110,7 @@ def main():
             if app.job_queue:
                 app.job_queue.run_daily(
                     send_daily_digest,
-                    time=dtime(hour=7, minute=30, tzinfo=LOCAL_TZ),
+                    time=dtime(hour=7, minute=30, tzinfo=get_tz(DEFAULT_TIMEZONE)),
                     name="daily_digest",
                 )
                 app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
