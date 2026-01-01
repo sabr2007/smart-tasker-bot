@@ -394,7 +394,7 @@ async def _execute_show_tasks(
     
     for task_id, text, due_at, is_recurring in tasks:
         if filter_type == "all":
-            filtered_tasks.append((task_id, text, due_at))
+            filtered_tasks.append((task_id, text, due_at, is_recurring))
         
         elif filter_type == "today":
             if due_at:
@@ -403,7 +403,7 @@ async def _execute_show_tasks(
                     # Convert to user's timezone for comparison
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == today:
-                        filtered_tasks.append((task_id, text, due_at))
+                        filtered_tasks.append((task_id, text, due_at, is_recurring))
         
         elif filter_type == "tomorrow":
             if due_at:
@@ -411,7 +411,7 @@ async def _execute_show_tasks(
                 if dt:
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == tomorrow:
-                        filtered_tasks.append((task_id, text, due_at))
+                        filtered_tasks.append((task_id, text, due_at, is_recurring))
         
         elif filter_type == "date" and date_str:
             try:
@@ -421,7 +421,7 @@ async def _execute_show_tasks(
                     if dt:
                         local_dt = utc_to_local(dt, user_timezone)
                         if local_dt and local_dt.date() == target_date:
-                            filtered_tasks.append((task_id, text, due_at))
+                            filtered_tasks.append((task_id, text, due_at, is_recurring))
             except ValueError:
                 return f"Ошибка: неверный формат даты '{date_str}'. Используй YYYY-MM-DD."
     
