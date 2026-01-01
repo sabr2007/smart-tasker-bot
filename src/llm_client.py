@@ -692,11 +692,6 @@ async def run_agent_turn(
 # LEGACY FUNCTIONS (kept for backward compatibility)
 # ============================================================
 
-from openai import OpenAI
-
-# Sync client for legacy functions
-_sync_client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 async def transcribe_audio(file_path: str) -> Optional[str]:
     """

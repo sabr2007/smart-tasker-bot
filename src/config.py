@@ -14,3 +14,5 @@ ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY не найден в .env")
 
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN не найден в .env")
