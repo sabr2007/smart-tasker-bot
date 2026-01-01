@@ -38,10 +38,8 @@ from bot.handlers.agent_text import handle_agent_message, handle_agent_voice
 from bot.handlers.callbacks import (
     on_mark_done_menu,
     on_mark_done_select,
-    on_remind_set,
     on_snooze_prompt,
     on_snooze_quick,
-    on_remind_expand,
 )
 
 
@@ -100,10 +98,8 @@ def main():
             # inline-кнопки
             app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
             app.add_handler(CallbackQueryHandler(on_mark_done_select, pattern=r"^done_task:\d+$"))
-            app.add_handler(CallbackQueryHandler(on_remind_set, pattern=r"^remind_set:\d+:(?:off|0|5|30|60)$"))
             app.add_handler(CallbackQueryHandler(on_snooze_prompt, pattern=r"^snooze_prompt:\d+$"))
             app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
-            app.add_handler(CallbackQueryHandler(on_remind_expand, pattern=r"^remind_expand:\d+$"))
 
             # команды админа
             app.add_handler(CommandHandler("start", cmd_start))

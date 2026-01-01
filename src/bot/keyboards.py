@@ -25,39 +25,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 
-# ==== INLINE КЛАВИАТУРЫ ДЛЯ НАПОМИНАНИЙ =====
-
-def reminder_compact_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Компактная клавиатура: только кнопка изменения."""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Изменить", callback_data=f"remind_expand:{task_id}"),
-            ]
-        ]
-    )
-
-
-def reminder_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Полная клавиатура выбора времени."""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("В дедлайн", callback_data=f"remind_set:{task_id}:0"),
-                InlineKeyboardButton("За 15 мин", callback_data=f"remind_set:{task_id}:15"),
-            ],
-            [
-                InlineKeyboardButton("За 1 час", callback_data=f"remind_set:{task_id}:60"),
-                InlineKeyboardButton("За 3 часа", callback_data=f"remind_set:{task_id}:180"),
-            ],
-            [
-                InlineKeyboardButton("За 24 часа", callback_data=f"remind_set:{task_id}:1440"),
-                InlineKeyboardButton("Без напоминания", callback_data=f"remind_set:{task_id}:off"),
-            ],
-        ]
-    )
-
-
 # ==== INLINE КЛАВИАТУРЫ ДЛЯ SNOOZE =====
 
 def snooze_keyboard(task_id: int) -> InlineKeyboardMarkup:

@@ -3,9 +3,6 @@
 
 Contains handlers for:
 - mark_done_menu / mark_done_select
-- clear_archive
-- remind_set (setting reminder duration)
-- remind_expand (showing full reminder options)
 - snooze_prompt / snooze_quick
 """
 
@@ -16,13 +13,9 @@ from telegram.ext import ContextTypes
 
 import db
 from bot.jobs import cancel_task_reminder, schedule_task_reminder
-from bot.keyboards import snooze_choice_keyboard, reminder_choice_keyboard
+from bot.keyboards import snooze_choice_keyboard
 from bot.services import send_tasks_list
-from time_utils import (
-    compute_remind_at_from_offset,
-    normalize_deadline_to_utc,
-    now_in_tz,
-)
+from time_utils import normalize_deadline_to_utc, now_in_tz
 
 
 async def on_mark_done_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,78 +90,6 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     await send_tasks_list(query.message.chat_id, user_id, context)
 
 
-
-
-async def on_remind_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Inline-выбор "за сколько напомнить" после создания задачи с дедлайном.
-    callback_data: remind_set:{task_id}:{5|30|60|0|off}
-    """
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data or ""
-    try:
-        _, task_id_str, val = data.split(":", maxsplit=2)
-        task_id = int(task_id_str)
-    except Exception:
-        return
-
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id if query.message else user_id
-
-    _remind_at, _offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
-    if not due_at:
-        await query.edit_message_text("У этой задачи нет дедлайна — напоминание не настроить.")
-        context.user_data.pop("pending_reminder_choice", None)
-        return
-
-    if val == "off":
-        cancel_task_reminder(task_id, context)
-        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
-        await query.edit_message_text("Ок, не буду напоминать по этой задаче.")
-        context.user_data.pop("pending_reminder_choice", None)
-        return
-
-    try:
-        offset_min = int(val)
-    except Exception:
-        return
-
-    new_remind_at = compute_remind_at_from_offset(due_at, offset_min)
-    if not new_remind_at:
-        await query.edit_message_text("Не смог настроить напоминание. Попробуй выбрать другую опцию.")
-        return
-
-    cancel_task_reminder(task_id, context)
-    await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=new_remind_at, remind_offset_min=offset_min)
-    schedule_task_reminder(
-        context.job_queue,
-        task_id=task_id,
-        task_text=task_text or "задача",
-        deadline_iso=due_at,
-        chat_id=chat_id,
-        remind_at_iso=new_remind_at,
-    )
-
-    await query.edit_message_text(f"Ок, напомню за {offset_min} мин.")
-    context.user_data.pop("pending_reminder_choice", None)
-
-
-async def on_remind_expand(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Разворачивает меню выбора напоминания."""
-    query = update.callback_query
-    await query.answer()
-    
-    # data format: remind_expand:{task_id}
-    try:
-        parts = query.data.split(":")
-        task_id = int(parts[1])
-        await query.edit_message_reply_markup(
-            reply_markup=reminder_choice_keyboard(task_id)
-        )
-    except Exception:
-        pass
 
 
 async def on_snooze_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
