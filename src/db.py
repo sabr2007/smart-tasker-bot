@@ -214,15 +214,15 @@ async def add_task(
         return int(row["id"])
 
 
-async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str]]]:
+async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool]]:
     """
-    Returns list of active tasks: (id, text, due_at).
+    Returns list of active tasks: (id, text, due_at, is_recurring).
     Sorted: tasks with deadlines first (ascending), then others.
     """
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, text, due_at
+            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring
             FROM tasks
             WHERE user_id = $1
               AND (status IS NULL OR status = 'active')
@@ -233,7 +233,7 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str]]]:
             """,
             user_id,
         )
-        return [(row["id"], row["text"], row["due_at"]) for row in rows]
+        return [(row["id"], row["text"], row["due_at"], row["is_recurring"]) for row in rows]
 
 
 async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str]]]:

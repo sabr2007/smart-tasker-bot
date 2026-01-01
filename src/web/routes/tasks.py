@@ -39,10 +39,10 @@ class TaskPatchIn(BaseModel):
     deadline_iso: Optional[str] = None
 
 
-def _task_tuple_to_out(row: tuple[int, str, Optional[str]]) -> TaskOut:
-    tid, text, due = row
+def _task_tuple_to_out(row: tuple[int, str, Optional[str], bool]) -> TaskOut:
+    tid, text, due, is_recurring = row
     # due_at is already stored in UTC format in the database
-    return TaskOut(id=int(tid), text=text, due_at=due)
+    return TaskOut(id=int(tid), text=text, due_at=due, is_recurring=is_recurring)
 
 
 def _archived_tuple_to_out(row: tuple[int, str, Optional[str], Optional[str]]) -> ArchivedTaskOut:

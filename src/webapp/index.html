@@ -54,7 +54,11 @@
                   <i data-lucide="check"></i>
                 </div>
                 <div class="task-content">
-                  <div class="task-text" :class="{ 'text-done': !!task.completed_at }">{{ task.text }}</div>
+                  <div class="task-text" :class="{ 'text-done': !!task.completed_at }">
+                    {{ task.text }}
+                    <i v-if="task.is_recurring" data-lucide="repeat"
+                      style="width: 14px; height: 14px; vertical-align: middle; margin-left: 4px; opacity: 0.6;"></i>
+                  </div>
                   <div class="task-meta" :class="{ overdue: isOverdue(task) }">
                     <i data-lucide="clock" style="width:12px; height:12px;" v-if="task.due_at"></i>
                     {{ formatDue(task.due_at) }}
@@ -102,7 +106,11 @@
               <i data-lucide="check"></i>
             </div>
             <div class="task-content">
-              <div class="task-text">{{ task.text }}</div>
+              <div class="task-text">
+                {{ task.text }}
+                <i v-if="task.is_recurring" data-lucide="repeat"
+                  style="width: 14px; height: 14px; vertical-align: middle; margin-left: 4px; opacity: 0.6;"></i>
+              </div>
               <div class="task-meta">{{ formatTime(task.due_at) }}</div>
             </div>
           </div>
