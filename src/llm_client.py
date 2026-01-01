@@ -1,492 +1,507 @@
 # src/llm_client.py
+"""
+AI Agent implementation using OpenAI Function Calling.
+
+This module implements the ReAct (Reasoning + Action) pattern:
+1. Send messages + tools to OpenAI
+2. If model responds with text -> return to user
+3. If model requests tool_calls -> execute, add result, repeat
+"""
 
 import json
 import logging
-import re
-import difflib
-from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
-from openai import OpenAI
+from typing import Any, Optional
 
-from config import OPENAI_API_KEY, OPENAI_MODEL, DEFAULT_TIMEZONE
-from prompts import (
-    get_multi_parser_system_prompt,
-    get_parser_system_prompt,
-    get_reply_system_prompt,
-)
-from task_schema import TaskInterpretation
+from openai import AsyncOpenAI
+
+import db
+from agent_tools import AGENT_TOOLS
+from config import OPENAI_API_KEY, OPENAI_MODEL
 from time_utils import (
-    DEFAULT_TIMEZONE as TIME_DEFAULT_TZ,
-    now_in_tz,
-    now_utc,
     normalize_deadline_to_utc,
-    parse_deadline_iso,
-    get_tz_offset_str,
+    now_in_tz,
     format_deadline_in_tz,
+    parse_deadline_iso,
+    utc_to_local,
 )
-
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 logger = logging.getLogger(__name__)
 
-# Максимум элементов в multi-ответе, которые готовы обработать в одном запросе
-# Максимум элементов в multi-ответе (увеличено для голосовых списков)
-MAX_ITEMS_PER_REQUEST = 50
-# Сколько delete подряд считаем потенциально опасными без подтверждения
-MAX_DELETE_WITHOUT_CONFIRM = 2
+# Async OpenAI client
+async_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Max iterations to prevent infinite loops
+MAX_AGENT_ITERATIONS = 10
 
 
-def _format_tasks_for_prompt(
-    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]]
+def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
+    """Build system prompt for the agent."""
+    return f"""Ты — AI-помощник для управления задачами в Telegram. Твоё имя — Smart Tasker.
+
+Текущее время пользователя: {now_str}
+Часовой пояс: {user_timezone}
+
+## Твои возможности (инструменты):
+
+1. **get_tasks()** — получить список активных задач с их ID
+2. **add_task(text, deadline?)** — создать новую задачу
+3. **complete_task(task_id)** — отметить задачу выполненной
+4. **delete_task(task_id)** — удалить задачу
+5. **update_deadline(task_id, action, deadline?)** — изменить дедлайн
+6. **rename_task(task_id, new_text)** — переименовать задачу
+7. **show_tasks(filter, date?)** — показать задачи с фильтром
+
+## ВАЖНЫЕ ПРАВИЛА:
+
+1. **Перед удалением/завершением/изменением задачи** — ВСЕГДА сначала вызови get_tasks(), чтобы узнать ID нужной задачи. Никогда не угадывай ID!
+
+2. **Дедлайны** передавай в формате ISO 8601 без таймзоны (например: 2025-01-15T10:00:00). Даты интерпретируй относительно текущего времени пользователя.
+
+3. **Если задача не найдена** — вежливо сообщи об этом и предложи список текущих задач.
+
+4. **Отвечай кратко** и по-русски. Используй эмодзи для наглядности.
+
+5. **При создании задачи** — подтверди создание, укажи текст и дедлайн (если есть).
+
+6. **Если пользователь здоровается** или спрашивает что-то не связанное с задачами — ответь дружелюбно, но кратко.
+
+## Примеры:
+- "добавь задачу купить молоко завтра в 10" → add_task(text="Купить молоко", deadline="2025-01-02T10:00:00")
+- "удали задачу про молоко" → сначала get_tasks(), потом delete_task(найденный_id)
+- "что у меня на сегодня?" → show_tasks(filter="today")
+"""
+
+
+# ============================================================
+# TOOL EXECUTORS
+# ============================================================
+
+async def execute_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    user_id: int,
+    user_timezone: str,
 ) -> str:
     """
-    Превращает список задач пользователя в компактный текстовый блок
-    для вставки в системный промпт парсера.
+    Execute a tool and return the result as a string.
+    
+    All database operations are wrapped in try/except to provide
+    friendly error messages to the agent.
     """
-    if not tasks_snapshot:
-        return "Сейчас у пользователя нет активных задач."
-
-    lines: list[str] = []
-    for i, (_tid, text, due) in enumerate(tasks_snapshot, start=1):
-        if due:
-            try:
-                # due is already in UTC format, parse directly
-                s = due.strip()
-                if s.endswith("Z"):
-                    s = s[:-1] + "+00:00"
-                dt = datetime.fromisoformat(s)
-                d_str = dt.strftime("%Y-%m-%d %H:%M")
-                lines.append(f"{i}. {text} (дедлайн: {d_str})")
-            except Exception:
-                lines.append(f"{i}. {text}")
+    try:
+        if tool_name == "get_tasks":
+            return await _execute_get_tasks(user_id, user_timezone)
+        
+        elif tool_name == "add_task":
+            return await _execute_add_task(
+                user_id,
+                arguments.get("text", ""),
+                arguments.get("deadline"),
+                user_timezone,
+            )
+        
+        elif tool_name == "complete_task":
+            return await _execute_complete_task(user_id, arguments.get("task_id"))
+        
+        elif tool_name == "delete_task":
+            return await _execute_delete_task(user_id, arguments.get("task_id"))
+        
+        elif tool_name == "update_deadline":
+            return await _execute_update_deadline(
+                user_id,
+                arguments.get("task_id"),
+                arguments.get("action", "reschedule"),
+                arguments.get("deadline"),
+                user_timezone,
+            )
+        
+        elif tool_name == "rename_task":
+            return await _execute_rename_task(
+                user_id,
+                arguments.get("task_id"),
+                arguments.get("new_text", ""),
+            )
+        
+        elif tool_name == "show_tasks":
+            return await _execute_show_tasks(
+                user_id,
+                arguments.get("filter", "all"),
+                arguments.get("date"),
+                user_timezone,
+            )
+        
         else:
-            lines.append(f"{i}. {text}")
-
-    return "Актуальные задачи пользователя:\n" + "\n".join(lines)
-
-
-def build_system_prompt(now_str: str, user_timezone: str, tasks_block: str) -> str:
-    tz_offset = get_tz_offset_str(user_timezone)
-    return get_parser_system_prompt(now_str, user_timezone, tz_offset, tasks_block)
+            return f"Ошибка: неизвестный инструмент '{tool_name}'"
+    
+    except Exception as e:
+        logger.exception("Tool execution error: %s", tool_name)
+        return f"Ошибка при выполнении операции: {str(e)}"
 
 
-def build_system_prompt_multi(now_str: str, user_timezone: str, tasks_block: str, max_items: int) -> str:
-    tz_offset = get_tz_offset_str(user_timezone)
-    return get_multi_parser_system_prompt(now_str, user_timezone, tz_offset, tasks_block, max_items)
+async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
+    """Get all active tasks for user."""
+    tasks = await db.get_tasks(user_id)
+    
+    if not tasks:
+        return "У пользователя нет активных задач."
+    
+    lines = []
+    for task_id, text, due_at in tasks:
+        if due_at:
+            due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
+            lines.append(f"ID {task_id}: {text} | Дедлайн: {due_str}")
+        else:
+            lines.append(f"ID {task_id}: {text} | Без дедлайна")
+    
+    return "Список задач:\n" + "\n".join(lines)
 
 
+async def _execute_add_task(
+    user_id: int,
+    text: str,
+    deadline: Optional[str],
+    user_timezone: str,
+) -> str:
+    """Create a new task."""
+    if not text or not text.strip():
+        return "Ошибка: текст задачи не может быть пустым."
+    
+    # Normalize deadline to UTC
+    deadline_utc = None
+    if deadline:
+        deadline_utc = normalize_deadline_to_utc(deadline, user_timezone)
+        if not deadline_utc:
+            return f"Ошибка: неверный формат дедлайна '{deadline}'. Используй ISO 8601."
+    
+    task_id = await db.add_task(user_id, text.strip(), deadline_utc)
+    
+    if deadline_utc:
+        due_str = format_deadline_in_tz(deadline_utc, user_timezone) or deadline
+        return f"Задача создана (ID {task_id}): '{text}' с дедлайном {due_str}"
+    else:
+        return f"Задача создана (ID {task_id}): '{text}'"
 
 
+async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:
+    """Mark task as completed."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    await db.set_task_done(user_id, task_id)
+    return f"Задача '{task[1]}' отмечена как выполненная ✓"
 
-def _normalize_deadline_to_utc(raw_value: Any, user_timezone: str) -> str | None:
+
+async def _execute_delete_task(user_id: int, task_id: Optional[int]) -> str:
+    """Delete a task."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    task_text = task[1]
+    await db.delete_task(user_id, task_id)
+    return f"Задача '{task_text}' удалена."
+
+
+async def _execute_update_deadline(
+    user_id: int,
+    task_id: Optional[int],
+    action: str,
+    deadline: Optional[str],
+    user_timezone: str,
+) -> str:
+    """Update task deadline."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    task_text = task[1]
+    
+    if action == "remove":
+        await db.update_task_due(user_id, task_id, None)
+        return f"Дедлайн задачи '{task_text}' убран."
+    
+    elif action in ("add", "reschedule"):
+        if not deadline:
+            return f"Ошибка: для действия '{action}' требуется указать дедлайн."
+        
+        deadline_utc = normalize_deadline_to_utc(deadline, user_timezone)
+        if not deadline_utc:
+            return f"Ошибка: неверный формат дедлайна '{deadline}'."
+        
+        await db.update_task_due(user_id, task_id, deadline_utc)
+        due_str = format_deadline_in_tz(deadline_utc, user_timezone) or deadline
+        
+        if action == "add":
+            return f"Дедлайн '{due_str}' добавлен к задаче '{task_text}'."
+        else:
+            return f"Задача '{task_text}' перенесена на {due_str}."
+    
+    else:
+        return f"Ошибка: неизвестное действие '{action}'. Используй add/reschedule/remove."
+
+
+async def _execute_rename_task(
+    user_id: int,
+    task_id: Optional[int],
+    new_text: str,
+) -> str:
+    """Rename a task."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    if not new_text or not new_text.strip():
+        return "Ошибка: новый текст задачи не может быть пустым."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    old_text = task[1]
+    await db.update_task_text(user_id, task_id, new_text.strip())
+    return f"Задача переименована: '{old_text}' → '{new_text.strip()}'"
+
+
+async def _execute_show_tasks(
+    user_id: int,
+    filter_type: str,
+    date_str: Optional[str],
+    user_timezone: str,
+) -> str:
+    """Show tasks with filter."""
+    tasks = await db.get_tasks(user_id)
+    
+    if not tasks:
+        return "У пользователя нет активных задач."
+    
+    now = now_in_tz(user_timezone)
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+    
+    filtered_tasks = []
+    
+    for task_id, text, due_at in tasks:
+        if filter_type == "all":
+            filtered_tasks.append((task_id, text, due_at))
+        
+        elif filter_type == "today":
+            if due_at:
+                dt = parse_deadline_iso(due_at)
+                if dt:
+                    # Convert to user's timezone for comparison
+                    local_dt = utc_to_local(dt, user_timezone)
+                    if local_dt and local_dt.date() == today:
+                        filtered_tasks.append((task_id, text, due_at))
+        
+        elif filter_type == "tomorrow":
+            if due_at:
+                dt = parse_deadline_iso(due_at)
+                if dt:
+                    local_dt = utc_to_local(dt, user_timezone)
+                    if local_dt and local_dt.date() == tomorrow:
+                        filtered_tasks.append((task_id, text, due_at))
+        
+        elif filter_type == "date" and date_str:
+            try:
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                if due_at:
+                    dt = parse_deadline_iso(due_at)
+                    if dt:
+                        from time_utils import convert_utc_to_tz
+                        local_dt = convert_utc_to_tz(dt, user_timezone)
+                        if local_dt and local_dt.date() == target_date:
+                            filtered_tasks.append((task_id, text, due_at))
+            except ValueError:
+                return f"Ошибка: неверный формат даты '{date_str}'. Используй YYYY-MM-DD."
+    
+    if not filtered_tasks:
+        filter_names = {
+            "all": "активных",
+            "today": "на сегодня",
+            "tomorrow": "на завтра",
+            "date": f"на {date_str}",
+        }
+        return f"Нет задач {filter_names.get(filter_type, '')}."
+    
+    lines = []
+    for task_id, text, due_at in filtered_tasks:
+        if due_at:
+            due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
+            lines.append(f"ID {task_id}: {text} | {due_str}")
+        else:
+            lines.append(f"ID {task_id}: {text}")
+    
+    filter_headers = {
+        "all": "Все активные задачи",
+        "today": "Задачи на сегодня",
+        "tomorrow": "Задачи на завтра",
+        "date": f"Задачи на {date_str}",
+    }
+    
+    return f"{filter_headers.get(filter_type, 'Задачи')}:\n" + "\n".join(lines)
+
+
+# ============================================================
+# AGENT LOOP
+# ============================================================
+
+async def run_agent_turn(
+    user_text: str,
+    user_id: int,
+    user_timezone: str,
+    history: Optional[list[dict]] = None,
+) -> tuple[str, list[dict]]:
     """
-    Converts LLM-returned deadline to UTC for storage.
+    Run one turn of the AI agent conversation.
+    
+    Implements the ReAct (Reasoning + Action) loop:
+    1. Send messages + tools to OpenAI
+    2. If model responds with text -> return to user
+    3. If model requests tool_calls -> execute, add result, repeat
     
     Args:
-        raw_value: Raw deadline_iso from LLM (in user's local timezone)
-        user_timezone: User's IANA timezone string
+        user_text: User's message
+        user_id: Telegram user ID
+        user_timezone: User's IANA timezone
+        history: Previous conversation history (optional)
     
     Returns:
-        UTC ISO string (with Z suffix) or None
+        Tuple of (agent_response, updated_history)
     """
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, datetime):
-        raw_value = raw_value.isoformat()
-    if not isinstance(raw_value, str):
-        return None
-    norm = normalize_deadline_to_utc(raw_value, user_timezone)
-    if norm is None:
-        logger.warning("deadline_iso is not valid ISO: %r", raw_value)
-    return norm
-
-
-# Legacy function for backward compatibility
-def _normalize_deadline_iso(raw_value: Any) -> str | None:
-    """DEPRECATED: Use _normalize_deadline_to_utc instead."""
-    return _normalize_deadline_to_utc(raw_value, DEFAULT_TIMEZONE)
-
-
-_DELETE_ALLOWED_PATTERNS = (
-    r"\bудали(?:ть)?\s+задачу\b",
-    r"\bубери\s+задачу\b",
-)
-
-
-
-
-
-def _apply_phrase_validator(raw_text: str, data: Dict[str, Any], now: datetime) -> tuple[Dict[str, Any], list[str]]:
-    """
-    Минимальная защита от деструктивных действий.
-    Оставляем только проверку на delete, чтобы не удалить задачу случайно.
-    """
-    fired: list[str] = []
-    lower = (raw_text or "").lower()
-
-    if data.get("action") == "delete":
-        # Проверяем, есть ли явные слова удаления в тексте
-        allowed = any(re.search(pat, lower) for pat in _DELETE_ALLOWED_PATTERNS)
-        if not allowed:
-            # Если модель решила "удалить", но слов удаления нет — считаем это ошибкой модели
-            data["action"] = "unknown"
-            fired.append("delete_blocked_by_phrase")
-
-    return data, fired
-
-
-def _sanitize_target_hint(
-    raw_input: str,
-    hint: Optional[str],
-    max_len: int = 120,
-) -> Optional[str]:
-    """
-    Очищает target_task_hint, не споря с моделью:
-    - оставляем только если это подстрока исходного текста (case-insensitive);
-    - убираем кавычки и служебные символы по краям;
-    - обрезаем по границе слова до max_len;
-    - если связи с текстом нет — возвращаем None.
-    """
-    if not hint:
-        return None
-
-    candidate = hint.strip().strip(" «»\"'“”„;")
-    if not candidate:
-        return None
-
-    raw_lower = raw_input.lower()
-    cand_lower = candidate.lower()
-
-    # Не подсовываем текст, которого не было в реплике пользователя
-    if cand_lower not in raw_lower:
-        return None
-
-    if len(candidate) > max_len:
-        cut = candidate[:max_len]
-        candidate = cut.rsplit(" ", 1)[0] or cut
-
-    return candidate or None
-
-
-def _match_task_title_from_snapshot(
-    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]],
-    hint: Optional[str],
-) -> Optional[str]:
-    """
-    Матч задачи по hint:
-    1) если hint как подстрока встречается ровно в одной задаче — возвращаем её;
-    2) иначе — fuzzy-матч с порогом и пересечением по содержательным словам;
-    3) иначе — None.
-    """
-    if not tasks_snapshot or not hint:
-        return None
-
-    hint_lower = hint.lower()
-
-    # 1) прямое вхождение
-    exact = [text for _, text, _ in tasks_snapshot if hint_lower in text.lower()]
-    if len(exact) == 1:
-        return exact[0]
-
-    # 2) fuzzy с пересечением токенов
-    def _tokens(s: str) -> set[str]:
-        parts = re.split(r"[\s,.;:!?\"'«»„“”()]+", s.lower())
-        return {p for p in parts if len(p) >= 3}
-
-    hint_tokens = _tokens(hint)
-    if not hint_tokens:
-        return None
-
-    best_text: Optional[str] = None
-    best_score: float = 0.0
-
-    for _, text, _ in tasks_snapshot:
-        text_tokens = _tokens(text)
-        # если нет пересечения по смысловым словам — пропускаем
-        if not (hint_tokens & text_tokens):
-            continue
-
-        score = difflib.SequenceMatcher(None, hint_lower, text.lower()).ratio()
-        if score > best_score:
-            best_score = score
-            best_text = text
-
-    return best_text if best_score >= 0.55 else None
-
-
-def _validate_action(value: str) -> str:
-    allowed = {
-        "create",
-        "complete",
-        "reschedule",
-        "add_deadline",
-        "clear_deadline",
-        "delete",
-        "rename",
-        "show_active",
-        "show_today",
-        "show_tomorrow",
-        "show_date",
-        "needs_clarification",
-        "unknown",
-    }
-    return value if value in allowed else "unknown"
-
-
-def parse_user_input_multi(
-    user_text: str,
-    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
-    max_items: int = 5,
-    user_timezone: str = DEFAULT_TIMEZONE,
-) -> List[TaskInterpretation]:
-    """
-    Тонкий адаптер над multi-ответом модели. Модель — источник истины,
-    здесь только нормализация формата и бизнес-ограничения.
-    
-    Args:
-        user_text: User message text
-        tasks_snapshot: Current active tasks
-        max_items: Max items to parse
-        user_timezone: User's IANA timezone for date interpretation
-    """
+    # Build system prompt
     now = now_in_tz(user_timezone)
-    now_str = now.isoformat()
-
-    tasks_block = _format_tasks_for_prompt(tasks_snapshot)
-    system_prompt = build_system_prompt_multi(now_str, user_timezone, tasks_block, max_items)
-
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-
-    raw = response.choices[0].message.content
-    logger.info("LLM Raw Multi Response: %s", raw)
-    try:
-        data: Dict[str, Any] = json.loads(raw)
-    except Exception:
-        logger.exception("Failed to decode multi-parse JSON: %r", raw)
-        return []
-
-    items = data.get("items")
-    if not isinstance(items, list):
-        return []
-
-    # Бизнес-лимит по количеству операций
-    if len(items) > MAX_ITEMS_PER_REQUEST:
-        logger.warning("Too many items in multi request: %s", len(items))
-        items = items[:MAX_ITEMS_PER_REQUEST]
-
-    results: list[TaskInterpretation] = []
-
-    # Посчитаем delete для простого анти-спама
-    delete_count = sum(1 for it in items if isinstance(it, dict) and (it.get("action") or "").strip() == "delete")
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-
-        action = _validate_action((item.get("action") or "unknown").strip())
-
-        # Ограничение на массовые удаления
-        if action == "delete" and delete_count > MAX_DELETE_WITHOUT_CONFIRM:
-            action = "unknown"
-            note = "delete_requires_confirmation"
-        else:
-            note = item.get("note")
-
-        raw_frag = item.get("raw_input") or user_text
-
-        ti_dict: Dict[str, Any] = {
-            "action": action,
-            "title": (item.get("title") or None),
-            "deadline_iso": _normalize_deadline_to_utc(item.get("deadline_iso"), user_timezone),
-            "target_task_hint": _sanitize_target_hint(raw_frag, item.get("target_task_hint")),
-            "note": note,
-            "language": item.get("language"),
-            "raw_input": raw_frag,
-        }
-
-        # Phrase validator (минимальная защита)
-        ti_dict, fired_rules = _apply_phrase_validator(raw_frag, ti_dict, now)
-
-        # Если действие требует дедлайна, а его нет — просим уточнение
-        if ti_dict.get("action") in {"reschedule", "add_deadline"} and not ti_dict.get("deadline_iso"):
-            ti_dict["action"] = "needs_clarification"
-            ti_dict["note"] = ti_dict.get("note") or "needs_deadline"
-            fired_rules.append("missing_deadline_for_action")
-
-        if fired_rules:
-            logger.info(
-                "validator_diag %s",
-                json.dumps(
-                    {
-                        "mode": "multi",
-                        "raw_input": raw_frag,
-                        "fired_rules": fired_rules,
-                        "action_after": ti_dict.get("action"),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-
-        # Дополнительный матч title по снапшоту только для целевых действий (без изменения смысла)
-        # ВАЖНО: НЕ делаем это для rename, чтобы не подставить старое название в title.
-        if ti_dict.get("action") in {"complete", "reschedule", "add_deadline", "clear_deadline", "delete"} and not ti_dict["title"] and ti_dict["target_task_hint"]:
-            matched_title = _match_task_title_from_snapshot(tasks_snapshot, ti_dict["target_task_hint"])
-            if matched_title:
-                ti_dict["title"] = matched_title
-
-        try:
-            ti = TaskInterpretation.model_validate(ti_dict)
-            if ti.action == "create" and not ti.title:
-                continue
-            results.append(ti)
-        except Exception:
-            logger.exception("Failed to validate multi item: %r", ti_dict)
-            continue
-
-    return results
-
-
-def parse_user_input(
-    user_text: str,
-    tasks_snapshot: Optional[List[Tuple[int, str, Optional[str]]]] = None,
-    user_timezone: str = DEFAULT_TIMEZONE,
-) -> TaskInterpretation:
-    """
-    Single-режим: модель — источник истины, мы только нормализуем формат и проверяем бизнес-ограничения.
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    system_prompt = build_agent_system_prompt(now_str, user_timezone)
     
-    Args:
-        user_text: User message text
-        tasks_snapshot: Current active tasks
-        user_timezone: User's IANA timezone for date interpretation
-    """
-    now = now_in_tz(user_timezone)
-    now_str = now.isoformat()
-
-    tasks_block = _format_tasks_for_prompt(tasks_snapshot)
-    system_prompt = build_system_prompt(now_str, user_timezone, tasks_block)
-
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-
-    raw = response.choices[0].message.content
-    logger.info("LLM Raw Single Response: %s", raw)
-    data: Dict[str, Any] = json.loads(raw)
-
-    if "raw_input" not in data or not data["raw_input"]:
-        data["raw_input"] = user_text
-
-    data["action"] = _validate_action(data.get("action", "unknown"))
-    data["deadline_iso"] = _normalize_deadline_to_utc(data.get("deadline_iso"), user_timezone)
-    data["target_task_hint"] = _sanitize_target_hint(user_text, data.get("target_task_hint"))
-
-    # Phrase validator (минимальная защита)
-    data, fired_rules = _apply_phrase_validator(user_text, data, now)
+    # Initialize messages
+    messages = [{"role": "system", "content": system_prompt}]
     
-    # Если дедлайн есть, но в прошлом — доверяем модели, но можем залогировать
-    if data.get("deadline_iso"):
-        dt = parse_deadline_iso(data.get("deadline_iso"))
-        if dt and dt < now:
-             logger.warning("LLM returned past deadline for %r", user_text)
-
-    # Если действие требует дедлайна, а его нет — просим уточнение
-    if data.get("action") in {"reschedule", "add_deadline"} and not data.get("deadline_iso"):
-        data["action"] = "needs_clarification"
-        data["note"] = data.get("note") or "needs_deadline"
-        fired_rules.append("missing_deadline_for_action")
-
-    if fired_rules:
+    # Add history if provided (limited to last N messages)
+    if history:
+        messages.extend(history[-10:])  # Keep last 10 messages for context
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_text})
+    
+    # ReAct loop
+    for iteration in range(MAX_AGENT_ITERATIONS):
         logger.info(
-            "validator_diag %s",
-            json.dumps(
-                {
-                    "mode": "single",
-                    "raw_input": user_text,
-                    "fired_rules": fired_rules,
-                    "action_after": data.get("action"),
-                },
-                ensure_ascii=False,
-            ),
+            "Agent iteration %d for user %d: %d messages",
+            iteration + 1, user_id, len(messages)
         )
+        
+        try:
+            response = await async_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                tools=AGENT_TOOLS,
+                tool_choice="auto",
+                temperature=0.3,
+            )
+        except Exception as e:
+            logger.exception("OpenAI API error")
+            return "Произошла ошибка при обработке запроса. Попробуй позже.", []
+        
+        message = response.choices[0].message
+        
+        # Add assistant message to history
+        messages.append({
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in (message.tool_calls or [])
+            ] if message.tool_calls else None,
+        })
+        
+        # Check if model wants to call tools
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                
+                try:
+                    arguments = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                logger.info(
+                    "Agent calling tool: %s with args: %s",
+                    tool_name, arguments
+                )
+                
+                # Execute tool
+                tool_result = await execute_tool(
+                    tool_name, arguments, user_id, user_timezone
+                )
+                
+                logger.info("Tool result: %s", tool_result[:200])
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                })
+            
+            # Continue loop to get final response
+            continue
+        
+        # No tool calls - we have the final response
+        final_response = message.content or "Готово!"
+        
+        # Build clean history for future turns (without system prompt)
+        updated_history = [
+            msg for msg in messages[1:]  # Skip system prompt
+            if msg.get("role") in ("user", "assistant") and msg.get("content")
+        ]
+        
+        return final_response, updated_history
+    
+    # Max iterations reached
+    logger.warning("Agent reached max iterations for user %d", user_id)
+    return "Не удалось обработать запрос. Попробуй переформулировать.", []
 
-    return TaskInterpretation.model_validate(data)
 
+# ============================================================
+# LEGACY FUNCTIONS (kept for backward compatibility)
+# ============================================================
 
-def build_reply_prompt() -> str:
-    return get_reply_system_prompt()
+from openai import OpenAI
 
-
-def _format_deadline_human(deadline_iso: Optional[str]) -> Optional[str]:
-    """
-    Превращает ISO-дедлайн в строку "дд.мм HH:MM".
-    Assumes deadline_iso is in UTC format.
-    """
-    if not deadline_iso:
-        return None
-    try:
-        # Parse UTC deadline directly
-        s = deadline_iso.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        return dt.strftime("%d.%m %H:%M")
-    except Exception:
-        return None
-
-
-def render_user_reply(event: Dict[str, Any]) -> str:
-    """
-    Принимает JSON-событие и возвращает текст ответа пользователю.
-    """
-    deadline_human = _format_deadline_human(event.get("deadline_iso"))
-    prev_deadline_human = _format_deadline_human(event.get("prev_deadline_iso"))
-
-    enriched_event = dict(event)
-    enriched_event["deadline_human"] = deadline_human
-    enriched_event["prev_deadline_human"] = prev_deadline_human
-
-    system_prompt = build_reply_prompt()
-
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        temperature=0.4,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": "Вот событие в JSON. Сформулируй короткий ответ пользователю:\n\n"
-                + json.dumps(enriched_event, ensure_ascii=False),
-            },
-        ],
-    )
-
-    text = response.choices[0].message.content.strip()
-    return text
+# Sync client for legacy functions
+_sync_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def transcribe_audio(file_path: str) -> Optional[str]:
     """
-    Расшифровывает аудиофайл (голосовое из Telegram) в текст с помощью OpenAI.
-    Возвращает строку с текстом или None в случае ошибки.
+    Transcribe audio file (voice message from Telegram) to text.
+    Returns transcribed text or None on error.
     """
     try:
         with open(file_path, "rb") as f:
-            result = client.audio.transcriptions.create(
+            result = _sync_client.audio.transcriptions.create(
                 model="gpt-4o-mini-transcribe",
                 file=f,
             )
@@ -495,4 +510,5 @@ def transcribe_audio(file_path: str) -> Optional[str]:
             return text.strip()
         return None
     except Exception:
+        logger.exception("Audio transcription error")
         return None
