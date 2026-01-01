@@ -171,7 +171,7 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Transcribe
         from llm_client import transcribe_audio
-        text = transcribe_audio(tmp_path)
+        text = await transcribe_audio(tmp_path)
         
         # Clean up
         try:

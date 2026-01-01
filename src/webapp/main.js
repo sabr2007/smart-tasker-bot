@@ -592,7 +592,6 @@ const App = {
       initReschedule, setDeadline,
       openSettings, openArchive, clearArchive, archiveTask,
       calPrevMonth, calNextMonth, selectDate,
-      calPrevMonth, calNextMonth, selectDate,
       saveTimezone,
       // Formatters
       formatDue, formatDate, formatTime, isOverdue

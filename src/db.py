@@ -236,16 +236,16 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool]]:
         return [(row["id"], row["text"], row["due_at"], row["is_recurring"]) for row in rows]
 
 
-async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str]]]:
-    """Returns one task (id, text, due_at) or None."""
+async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool]]:
+    """Returns one task (id, text, due_at, is_recurring) or None."""
     async with get_connection() as conn:
         row = await conn.fetchrow(
-            "SELECT id, text, due_at FROM tasks WHERE id = $1 AND user_id = $2",
+            "SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring FROM tasks WHERE id = $1 AND user_id = $2",
             task_id, user_id,
         )
     if not row:
         return None
-    return (row["id"], row["text"], row["due_at"])
+    return (row["id"], row["text"], row["due_at"], row["is_recurring"])
 
 
 async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) -> Optional[dict]:

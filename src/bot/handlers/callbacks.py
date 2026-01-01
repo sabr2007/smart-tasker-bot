@@ -41,7 +41,7 @@ async def on_mark_done_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard: list[list[InlineKeyboardButton]] = []
-    for task_id, text, _ in tasks:
+    for task_id, text, _, _ in tasks:
         label = text if len(text) <= 30 else text[:27] + "..."
         keyboard.append(
             [
@@ -79,7 +79,7 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     # найдём текст задачи, чтобы красиво показать
     tasks = await db.get_tasks(user_id)
     task_text = None
-    for tid, txt, _ in tasks:
+    for tid, txt, _, _ in tasks:
         if tid == task_id:
             task_text = txt
             break

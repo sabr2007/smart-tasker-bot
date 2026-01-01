@@ -277,7 +277,7 @@ async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:
     if new_task_id and _schedule_reminder_callback:
         new_task = await db.get_task(user_id, new_task_id)
         if new_task:
-            _, text, due_at = new_task
+            _, text, due_at, _ = new_task
             if due_at:
                 _schedule_reminder_callback(new_task_id, text, due_at, user_id)
     
@@ -698,14 +698,14 @@ from openai import OpenAI
 _sync_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-def transcribe_audio(file_path: str) -> Optional[str]:
+async def transcribe_audio(file_path: str) -> Optional[str]:
     """
     Transcribe audio file (voice message from Telegram) to text.
     Returns transcribed text or None on error.
     """
     try:
         with open(file_path, "rb") as f:
-            result = _sync_client.audio.transcriptions.create(
+            result = await async_client.audio.transcriptions.create(
                 model="gpt-4o-mini-transcribe",
                 file=f,
             )
