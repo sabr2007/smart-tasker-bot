@@ -17,7 +17,7 @@ from config import WEBAPP_URL
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [
-            KeyboardButton("Показать задачи"),
+            KeyboardButton("Покажи задачи"),
             KeyboardButton("Открыть панель задач", web_app=WebAppInfo(url=WEBAPP_URL)),
         ],
     ],
