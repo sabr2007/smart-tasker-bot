@@ -144,6 +144,16 @@ async def init_db():
         if "remind_offset_min" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN remind_offset_min INTEGER")
 
+        # Recurrence columns for recurring tasks
+        if "is_recurring" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN is_recurring BOOLEAN DEFAULT FALSE")
+        if "recurrence_type" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN recurrence_type TEXT")
+        if "recurrence_interval" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN recurrence_interval INTEGER")
+        if "recurrence_end_date" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN recurrence_end_date TEXT")
+
 
 # ======== USER SETTINGS (Timezone) ========
 
@@ -242,7 +252,9 @@ async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) 
     """Returns full task row (dict) or None."""
     row = await conn.fetchrow(
         """
-        SELECT id, user_id, text, created_at, due_at, remind_at, remind_offset_min, status, completed_at, category
+        SELECT id, user_id, text, created_at, due_at, remind_at, remind_offset_min, 
+               status, completed_at, category, is_recurring, recurrence_type, 
+               recurrence_interval, recurrence_end_date
         FROM tasks
         WHERE id = $1 AND user_id = $2
         """,
@@ -263,6 +275,10 @@ async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) 
         "completed_at": row["completed_at"],
         "category": row["category"],
         "source": None,
+        "is_recurring": row["is_recurring"],
+        "recurrence_type": row["recurrence_type"],
+        "recurrence_interval": row["recurrence_interval"],
+        "recurrence_end_date": row["recurrence_end_date"],
     }
 
 
@@ -372,11 +388,22 @@ async def delete_task(user_id: int, task_id: int):
         )
 
 
-async def set_task_done(user_id: int, task_id: int):
-    """Marks task as completed (status='done') and writes snapshot to tasks_history."""
+async def set_task_done(user_id: int, task_id: int) -> tuple[bool, Optional[int]]:
+    """Marks task as completed and creates next occurrence if recurring.
+    
+    Returns:
+        Tuple of (success, new_task_id). new_task_id is set if a recurring
+        task created a next occurrence, None otherwise.
+    """
+    from time_utils import calculate_next_occurrence
+    
     now_iso = now_utc().isoformat().replace("+00:00", "Z")
+    new_task_id: Optional[int] = None
+    
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
+        if not task_row:
+            return (False, None)
 
         await conn.execute(
             """
@@ -391,6 +418,138 @@ async def set_task_done(user_id: int, task_id: int):
             task_row["status"] = "done"
             task_row["completed_at"] = now_iso
             await _archive_task_snapshot(conn, task_row, reason="completed")
+            
+            # Create next occurrence if task is recurring
+            if task_row.get("is_recurring") and task_row.get("due_at"):
+                recurrence_type = task_row.get("recurrence_type")
+                interval = task_row.get("recurrence_interval") or 1
+                end_date = task_row.get("recurrence_end_date")
+                
+                next_due = calculate_next_occurrence(
+                    task_row["due_at"], recurrence_type, interval
+                )
+                
+                # Check if next_due exceeds end_date
+                if next_due and end_date:
+                    if next_due > end_date:
+                        next_due = None
+                
+                if next_due:
+                    # Create new task with same parameters
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO tasks (
+                            user_id, text, due_at, remind_at, remind_offset_min, category,
+                            is_recurring, recurrence_type, recurrence_interval, recurrence_end_date
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING id
+                        """,
+                        user_id,
+                        task_row["text"],
+                        next_due,
+                        next_due,  # remind_at = due_at for recurring
+                        0,  # remind_offset_min = 0 (remind at deadline)
+                        task_row.get("category"),
+                        True,  # is_recurring
+                        recurrence_type,
+                        interval,
+                        end_date,
+                    )
+                    new_task_id = int(row["id"])
+    
+    return (True, new_task_id)
+
+
+# ======== RECURRENCE MANAGEMENT ========
+
+async def set_task_recurrence(
+    user_id: int,
+    task_id: int,
+    recurrence_type: str,
+    interval: Optional[int] = None,
+    end_date: Optional[str] = None,
+) -> bool:
+    """Set recurrence parameters for a task.
+    
+    Args:
+        user_id: User ID
+        task_id: Task ID
+        recurrence_type: 'daily', 'weekly', 'monthly', or 'custom'
+        interval: For 'custom' type - number of days between occurrences
+        end_date: Optional UTC ISO date when recurrence stops
+    
+    Returns:
+        True if successful, False if task not found.
+    """
+    async with get_connection() as conn:
+        result = await conn.execute(
+            """
+            UPDATE tasks
+            SET is_recurring = TRUE,
+                recurrence_type = $1,
+                recurrence_interval = $2,
+                recurrence_end_date = $3
+            WHERE id = $4 AND user_id = $5
+            """,
+            recurrence_type,
+            interval if recurrence_type == "custom" else None,
+            end_date,
+            task_id,
+            user_id,
+        )
+        return result != "UPDATE 0"
+
+
+async def remove_task_recurrence(user_id: int, task_id: int) -> bool:
+    """Remove recurrence from a task.
+    
+    Returns:
+        True if successful, False if task not found.
+    """
+    async with get_connection() as conn:
+        result = await conn.execute(
+            """
+            UPDATE tasks
+            SET is_recurring = FALSE,
+                recurrence_type = NULL,
+                recurrence_interval = NULL,
+                recurrence_end_date = NULL
+            WHERE id = $1 AND user_id = $2
+            """,
+            task_id,
+            user_id,
+        )
+        return result != "UPDATE 0"
+
+
+async def get_task_recurrence(
+    user_id: int, task_id: int
+) -> Optional[dict]:
+    """Get recurrence settings for a task.
+    
+    Returns:
+        Dict with is_recurring, recurrence_type, recurrence_interval, recurrence_end_date
+        or None if task not found.
+    """
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT is_recurring, recurrence_type, recurrence_interval, recurrence_end_date
+            FROM tasks
+            WHERE id = $1 AND user_id = $2
+            """,
+            task_id,
+            user_id,
+        )
+    if not row:
+        return None
+    return {
+        "is_recurring": row["is_recurring"] or False,
+        "recurrence_type": row["recurrence_type"],
+        "recurrence_interval": row["recurrence_interval"],
+        "recurrence_end_date": row["recurrence_end_date"],
+    }
 
 
 async def set_task_active(user_id: int, task_id: int):

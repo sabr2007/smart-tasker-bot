@@ -188,6 +188,63 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_task_recurring",
+            "description": (
+                "Сделать задачу повторяющейся (регулярной). "
+                "После выполнения задачи автоматически создастся новая с тем же текстом. "
+                "recurrence_type: 'daily' (каждый день), 'weekly' (каждую неделю), "
+                "'monthly' (каждый месяц), 'custom' (каждые N дней). "
+                "Для 'custom' требуется параметр interval (количество дней)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "ID задачи",
+                    },
+                    "recurrence_type": {
+                        "type": "string",
+                        "enum": ["daily", "weekly", "monthly", "custom"],
+                        "description": "Тип повторения",
+                    },
+                    "interval": {
+                        "type": "integer",
+                        "description": "Интервал в днях (только для type=custom)",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Дата окончания повторений в ISO 8601 (опционально)",
+                    },
+                },
+                "required": ["task_id", "recurrence_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_task_recurrence",
+            "description": (
+                "Отключить повторение задачи. "
+                "Задача останется в списке, но больше не будет автоматически "
+                "создаваться после выполнения."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "ID задачи",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 

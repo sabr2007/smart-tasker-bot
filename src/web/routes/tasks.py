@@ -17,6 +17,9 @@ class TaskOut(BaseModel):
     id: int
     text: str
     due_at: Optional[str] = None
+    is_recurring: bool = False
+    recurrence_type: Optional[str] = None
+    recurrence_interval: Optional[int] = None
 
 
 class ArchivedTaskOut(BaseModel):
@@ -166,8 +169,14 @@ async def complete_task(task_id: int, user=Depends(get_current_user)) -> Dict[st
     row = await db.get_task(user_id, task_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    await db.set_task_done(user_id, task_id)
-    return {"ok": True}
+    
+    # Complete task - may create new occurrence if recurring
+    success, new_task_id = await db.set_task_done(user_id, task_id)
+    
+    # Note: WebApp completions won't auto-schedule reminders for new occurrences
+    # until bot restarts. This is a known limitation.
+    
+    return {"ok": True, "new_task_id": new_task_id}
 
 
 @router.post("/{task_id}/reopen")

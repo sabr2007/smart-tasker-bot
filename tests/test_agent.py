@@ -168,7 +168,7 @@ class TestToolExecutors:
         from llm_client import _execute_complete_task
         
         mock_db.get_task = AsyncMock(return_value=(5, "Buy milk", None))
-        mock_db.set_task_done = AsyncMock()
+        mock_db.set_task_done = AsyncMock(return_value=(True, None))  # Returns tuple now
         
         result = await _execute_complete_task(user_id=123, task_id=5)
         
@@ -201,6 +201,7 @@ class TestToolExecutors:
         
         mock_db.get_task = AsyncMock(return_value=(5, "Task", "2025-01-15T10:00:00Z"))
         mock_db.update_task_due = AsyncMock()
+        mock_db.update_task_reminder_settings = AsyncMock()  # Added missing mock
         
         result = await _execute_update_deadline(
             user_id=123,

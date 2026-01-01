@@ -86,6 +86,8 @@ def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
 5. update_deadline(task_id, action, deadline?) — изменить дедлайн СУЩЕСТВУЮЩЕЙ задачи
 6. rename_task(task_id, new_text) — переименовать задачу
 7. show_tasks(filter, date?) — показать задачи с фильтром
+8. set_task_recurring(task_id, recurrence_type, interval?, end_date?) — сделать задачу повторяющейся
+9. remove_task_recurrence(task_id) — отключить повторение задачи
 
 ## КРИТИЧЕСКИЕ ПРАВИЛА:
 
@@ -106,6 +108,12 @@ def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
 - "удали задачу про молоко" → get_tasks(), потом delete_task(найденный_id)
 - "встретить девушку надо в понедельник" → get_tasks(), найти ID задачи про девушку, update_deadline(id, action="reschedule", deadline=...)
 - "что у меня на сегодня?" → show_tasks(filter="today")
+
+## Примеры регулярных (повторяющихся) задач:
+- "напоминай мне каждый день в 10 утра пить воду" → add_task(text="Пить воду", deadline=...), потом set_task_recurring(id, "daily")
+- "каждую неделю в понедельник звонить маме" → add_task(...), set_task_recurring(id, "weekly")
+- "каждые 3 дня поливать цветы" → add_task(...), set_task_recurring(id, "custom", interval=3)
+- "больше не напоминать каждый день про витамины" → get_tasks(), remove_task_recurrence(id)
 """
 
 
@@ -167,6 +175,22 @@ async def execute_tool(
                 user_timezone,
             )
         
+        elif tool_name == "set_task_recurring":
+            return await _execute_set_task_recurring(
+                user_id,
+                arguments.get("task_id"),
+                arguments.get("recurrence_type"),
+                arguments.get("interval"),
+                arguments.get("end_date"),
+                user_timezone,
+            )
+        
+        elif tool_name == "remove_task_recurrence":
+            return await _execute_remove_task_recurrence(
+                user_id,
+                arguments.get("task_id"),
+            )
+        
         else:
             return f"Ошибка: неизвестный инструмент '{tool_name}'"
     
@@ -224,7 +248,7 @@ async def _execute_add_task(
 
 
 async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:
-    """Mark task as completed."""
+    """Mark task as completed. If recurring, creates next occurrence."""
     if task_id is None:
         return "Ошибка: не указан ID задачи."
     
@@ -233,11 +257,20 @@ async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:
     if not task:
         return f"Ошибка: задача с ID {task_id} не найдена."
     
-    await db.set_task_done(user_id, task_id)
+    # Complete task - returns (success, new_task_id if recurring)
+    success, new_task_id = await db.set_task_done(user_id, task_id)
     
-    # Cancel reminder if callback is set
+    # Cancel reminder for completed task
     if _cancel_reminder_callback:
         _cancel_reminder_callback(task_id)
+    
+    # Schedule reminder for new occurrence if task was recurring
+    if new_task_id and _schedule_reminder_callback:
+        new_task = await db.get_task(user_id, new_task_id)
+        if new_task:
+            _, text, due_at = new_task
+            if due_at:
+                _schedule_reminder_callback(new_task_id, text, due_at, user_id)
     
     return f"Задача '{task[1]}' отмечена как выполненная ✓"
 
@@ -417,6 +450,80 @@ async def _execute_show_tasks(
     }
     
     return f"{filter_headers.get(filter_type, 'Задачи')}:\n" + "\n".join(lines)
+
+
+async def _execute_set_task_recurring(
+    user_id: int,
+    task_id: Optional[int],
+    recurrence_type: Optional[str],
+    interval: Optional[int],
+    end_date: Optional[str],
+    user_timezone: str,
+) -> str:
+    """Set a task as recurring."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    if not recurrence_type:
+        return "Ошибка: не указан тип повторения (daily, weekly, monthly, custom)."
+    
+    valid_types = ["daily", "weekly", "monthly", "custom"]
+    if recurrence_type not in valid_types:
+        return f"Ошибка: неверный тип повторения '{recurrence_type}'. Используй: {', '.join(valid_types)}."
+    
+    if recurrence_type == "custom" and (not interval or interval < 1):
+        return "Ошибка: для типа 'custom' требуется параметр interval (количество дней, минимум 1)."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    # Convert end_date to UTC if provided
+    end_date_utc = None
+    if end_date:
+        end_date_utc = normalize_deadline_to_utc(end_date, user_timezone)
+    
+    # Set recurrence
+    success = await db.set_task_recurrence(
+        user_id, task_id, recurrence_type, interval, end_date_utc
+    )
+    
+    if not success:
+        return f"Ошибка: не удалось установить повторение для задачи с ID {task_id}."
+    
+    # Build confirmation message
+    type_names = {
+        "daily": "каждый день",
+        "weekly": "каждую неделю",
+        "monthly": "каждый месяц",
+        "custom": f"каждые {interval} дн.",
+    }
+    type_str = type_names.get(recurrence_type, recurrence_type)
+    
+    return f"Задача '{task[1]}' теперь повторяется {type_str} 🔁"
+
+
+async def _execute_remove_task_recurrence(
+    user_id: int,
+    task_id: Optional[int],
+) -> str:
+    """Remove recurrence from a task."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    # Remove recurrence
+    success = await db.remove_task_recurrence(user_id, task_id)
+    
+    if not success:
+        return f"Ошибка: не удалось отключить повторение для задачи с ID {task_id}."
+    
+    return f"Повторение задачи '{task[1]}' отключено ✓"
 
 
 # ============================================================

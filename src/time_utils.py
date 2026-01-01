@@ -436,3 +436,59 @@ def compute_remind_at_from_offset(due_iso: str, offset_min: int) -> str | None:
         return None
 
 
+# ======== RECURRENCE UTILITIES ========
+
+def calculate_next_occurrence(
+    current_due_utc: str, 
+    recurrence_type: str, 
+    interval: int = 1
+) -> str | None:
+    """Calculate next occurrence deadline based on recurrence pattern.
+    
+    Args:
+        current_due_utc: Current deadline in UTC ISO format (with 'Z' or '+00:00')
+        recurrence_type: 'daily', 'weekly', 'monthly', or 'custom'
+        interval: For 'custom' type - number of days between occurrences
+    
+    Returns:
+        Next deadline in UTC ISO format with 'Z' suffix, or None if parsing fails
+    
+    Uses python-dateutil's relativedelta for proper date arithmetic:
+    - Handles month boundaries correctly (31 Jan + 1 month = 28/29 Feb)
+    - Preserves time of day
+    - Works correctly across DST transitions
+    """
+    from dateutil.relativedelta import relativedelta
+    
+    if not current_due_utc:
+        return None
+    
+    try:
+        s = current_due_utc.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        
+        # Calculate next occurrence based on type
+        if recurrence_type == "daily":
+            next_dt = dt + relativedelta(days=1)
+        elif recurrence_type == "weekly":
+            next_dt = dt + relativedelta(weeks=1)
+        elif recurrence_type == "monthly":
+            next_dt = dt + relativedelta(months=1)
+        elif recurrence_type == "custom":
+            next_dt = dt + timedelta(days=max(1, interval))
+        else:
+            # Unknown type - default to daily
+            next_dt = dt + relativedelta(days=1)
+        
+        # Return in UTC with Z suffix
+        return next_dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+
+
