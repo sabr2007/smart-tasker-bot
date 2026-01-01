@@ -8,7 +8,7 @@ from typing import Optional
 
 import asyncpg
 
-from time_utils import now_local_iso
+from time_utils import now_utc
 
 # Database URL from Railway (e.g. postgresql://user:pass@host:port/dbname)
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -359,7 +359,7 @@ async def update_task_text(user_id: int, task_id: int, new_text: str):
 
 async def delete_task(user_id: int, task_id: int):
     """Deletes a task (physically) and writes snapshot to tasks_history."""
-    deleted_at_iso = now_local_iso()
+    deleted_at_iso = now_utc().isoformat().replace("+00:00", "Z")
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
         if task_row:
@@ -374,7 +374,7 @@ async def delete_task(user_id: int, task_id: int):
 
 async def set_task_done(user_id: int, task_id: int):
     """Marks task as completed (status='done') and writes snapshot to tasks_history."""
-    now_iso = now_local_iso()
+    now_iso = now_utc().isoformat().replace("+00:00", "Z")
     async with get_connection() as conn:
         task_row = await _fetch_task_row(conn, user_id, task_id)
 
@@ -479,7 +479,7 @@ async def clear_archived_tasks(user_id: int) -> None:
         )
 
         if rows:
-            deleted_at_iso = now_local_iso()
+            deleted_at_iso = now_utc().isoformat().replace("+00:00", "Z")
             for row in rows:
                 snapshot = {
                     "task_id": row["id"],

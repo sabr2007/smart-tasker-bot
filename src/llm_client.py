@@ -10,8 +10,8 @@ This module implements the ReAct (Reasoning + Action) pattern:
 
 import json
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Optional
 
 from openai import AsyncOpenAI
 
@@ -22,7 +22,6 @@ from time_utils import (
     normalize_deadline_to_utc,
     now_in_tz,
     format_deadline_in_tz,
-    parse_deadline_iso,
     utc_to_local,
 )
 
@@ -34,6 +33,41 @@ async_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # Max iterations to prevent infinite loops
 MAX_AGENT_ITERATIONS = 10
+
+# Callbacks for reminder management (injected from main.py)
+_cancel_reminder_callback: Callable[[int], None] | None = None
+_schedule_reminder_callback: Callable[[int, str, str, int], None] | None = None
+
+
+def set_cancel_reminder_callback(callback: Callable[[int], None]) -> None:
+    """Set callback to cancel reminders. Called from main.py on startup."""
+    global _cancel_reminder_callback
+    _cancel_reminder_callback = callback
+
+
+def set_schedule_reminder_callback(callback: Callable[[int, str, str, int], None]) -> None:
+    """Set callback to schedule reminders. Called from main.py on startup.
+    
+    Callback signature: (task_id, task_text, deadline_utc_iso, user_id)
+    """
+    global _schedule_reminder_callback
+    _schedule_reminder_callback = callback
+
+
+def _parse_utc_iso(iso_str: str | None) -> datetime | None:
+    """Parse UTC ISO string to datetime. Supports 'Z' suffix."""
+    if not iso_str:
+        return None
+    s = iso_str.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
@@ -177,6 +211,10 @@ async def _execute_add_task(
     
     task_id = await db.add_task(user_id, text.strip(), deadline_utc)
     
+    # Schedule reminder if deadline is set
+    if deadline_utc and _schedule_reminder_callback:
+        _schedule_reminder_callback(task_id, text.strip(), deadline_utc, user_id)
+    
     if deadline_utc:
         due_str = format_deadline_in_tz(deadline_utc, user_timezone) or deadline
         return f"Задача создана (ID {task_id}): '{text}' с дедлайном {due_str}"
@@ -195,6 +233,11 @@ async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:
         return f"Ошибка: задача с ID {task_id} не найдена."
     
     await db.set_task_done(user_id, task_id)
+    
+    # Cancel reminder if callback is set
+    if _cancel_reminder_callback:
+        _cancel_reminder_callback(task_id)
+    
     return f"Задача '{task[1]}' отмечена как выполненная ✓"
 
 
@@ -210,6 +253,11 @@ async def _execute_delete_task(user_id: int, task_id: Optional[int]) -> str:
     
     task_text = task[1]
     await db.delete_task(user_id, task_id)
+    
+    # Cancel reminder if callback is set
+    if _cancel_reminder_callback:
+        _cancel_reminder_callback(task_id)
+    
     return f"Задача '{task_text}' удалена."
 
 
@@ -232,7 +280,11 @@ async def _execute_update_deadline(
     task_text = task[1]
     
     if action == "remove":
+        # Cancel existing reminder
+        if _cancel_reminder_callback:
+            _cancel_reminder_callback(task_id)
         await db.update_task_due(user_id, task_id, None)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=None, remind_offset_min=None)
         return f"Дедлайн задачи '{task_text}' убран."
     
     elif action in ("add", "reschedule"):
@@ -243,7 +295,18 @@ async def _execute_update_deadline(
         if not deadline_utc:
             return f"Ошибка: неверный формат дедлайна '{deadline}'."
         
+        # Cancel old reminder and schedule new one
+        if _cancel_reminder_callback:
+            _cancel_reminder_callback(task_id)
+        
         await db.update_task_due(user_id, task_id, deadline_utc)
+        # Update remind_at to match new deadline (remind at deadline time)
+        await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=deadline_utc, remind_offset_min=0)
+        
+        # Schedule new reminder
+        if _schedule_reminder_callback:
+            _schedule_reminder_callback(task_id, task_text, deadline_utc, user_id)
+        
         due_str = format_deadline_in_tz(deadline_utc, user_timezone) or deadline
         
         if action == "add":
@@ -301,7 +364,7 @@ async def _execute_show_tasks(
         
         elif filter_type == "today":
             if due_at:
-                dt = parse_deadline_iso(due_at)
+                dt = _parse_utc_iso(due_at)
                 if dt:
                     # Convert to user's timezone for comparison
                     local_dt = utc_to_local(dt, user_timezone)
@@ -310,7 +373,7 @@ async def _execute_show_tasks(
         
         elif filter_type == "tomorrow":
             if due_at:
-                dt = parse_deadline_iso(due_at)
+                dt = _parse_utc_iso(due_at)
                 if dt:
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == tomorrow:
@@ -320,10 +383,9 @@ async def _execute_show_tasks(
             try:
                 target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 if due_at:
-                    dt = parse_deadline_iso(due_at)
+                    dt = _parse_utc_iso(due_at)
                     if dt:
-                        from time_utils import convert_utc_to_tz
-                        local_dt = convert_utc_to_tz(dt, user_timezone)
+                        local_dt = utc_to_local(dt, user_timezone)
                         if local_dt and local_dt.date() == target_date:
                             filtered_tasks.append((task_id, text, due_at))
             except ValueError:
@@ -415,7 +477,12 @@ async def run_agent_turn(
             )
         except Exception as e:
             logger.exception("OpenAI API error")
-            return "Произошла ошибка при обработке запроса. Попробуй позже.", []
+            # Preserve history on error (skip system prompt which is messages[0])
+            preserved_history = [
+                msg for msg in messages[1:]
+                if msg.get("role") in ("user", "assistant") and msg.get("content")
+            ]
+            return "Произошла ошибка при обработке запроса. Попробуй позже.", preserved_history
         
         message = response.choices[0].message
         
@@ -436,15 +503,25 @@ async def run_agent_turn(
             ] if message.tool_calls else None,
         })
         
-        # Check if model wants to call tools
         if message.tool_calls:
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name
                 
                 try:
                     arguments = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        "Failed to parse tool arguments for %s: %s",
+                        tool_name, tool_call.function.arguments
+                    )
+                    # Provide error to LLM so it can recover
+                    tool_result = f"Ошибка: не удалось распарсить аргументы инструмента. Попробуй вызвать инструмент ещё раз с корректными параметрами."
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result,
+                    })
+                    continue
                 
                 logger.info(
                     "Agent calling tool: %s with args: %s",

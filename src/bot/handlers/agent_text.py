@@ -66,26 +66,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.services import send_tasks_list
         await send_tasks_list(chat_id, user_id, context)
         return
-    
-    if text == "Архив":
-        from bot.services import send_archive_list
-        await send_archive_list(chat_id, user_id, context)
-        return
-    
-    if text == "Инструкция":
-        await update.message.reply_text(
-            "Я — AI-помощник для управления задачами.\n\n"
-            "📝 **Создать задачу**: просто напиши задачу\n"
-            "✅ **Завершить**: \"выполнил задачу про...\"\n"
-            "🗑 **Удалить**: \"удали задачу про...\"\n"
-            "📅 **Перенести**: \"перенеси встречу на завтра\"\n"
-            "📋 **Показать**: \"что у меня на сегодня?\"\n\n"
-            "Я понимаю естественный язык — пиши как удобно!",
-            reply_markup=MAIN_KEYBOARD,
-            parse_mode="Markdown",
-        )
-        return
-    
+ 
     # --- 1. Rate limit check ---
     is_allowed, wait_seconds = check_rate_limit(user_id)
     if not is_allowed:

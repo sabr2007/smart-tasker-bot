@@ -80,6 +80,16 @@ def main():
                 .build()
             )
 
+            # Inject cancel reminder callback for agent tools
+            from llm_client import set_cancel_reminder_callback, set_schedule_reminder_callback
+            from bot.jobs import cancel_task_reminder_by_id, schedule_task_reminder
+            set_cancel_reminder_callback(lambda tid: cancel_task_reminder_by_id(tid, app.job_queue))
+            set_schedule_reminder_callback(
+                lambda tid, text, deadline, uid: schedule_task_reminder(
+                    app.job_queue, tid, text, deadline, uid
+                )
+            )
+
             # 4. Регистрируем хэндлеры
             # текстовые сообщения (AI Agent)
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_agent_message))

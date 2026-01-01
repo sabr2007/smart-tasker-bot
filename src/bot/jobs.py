@@ -150,6 +150,15 @@ def cancel_task_reminder(task_id: int, context: ContextTypes.DEFAULT_TYPE) -> No
         job.schedule_removal()
 
 
+def cancel_task_reminder_by_id(task_id: int, job_queue) -> None:
+    """Cancel reminder job by task ID. Used by agent tools."""
+    if not job_queue:
+        return
+    jobs = job_queue.get_jobs_by_name(f"reminder:{task_id}")
+    for job in jobs:
+        job.schedule_removal()
+
+
 async def restore_reminders(job_queue):
     """
     После рестарта бота восстанавливает напоминания по активным задачам с будущими дедлайнами.
