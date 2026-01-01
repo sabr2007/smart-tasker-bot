@@ -36,7 +36,7 @@ async def send_tasks_list(chat_id: int, user_id: int, context: ContextTypes.DEFA
     with_due: list[str] = []
     without_due: list[str] = []
 
-    for tid, txt, due in tasks:
+    for tid, txt, due, is_recurring in tasks:
         if due:
             try:
                 # Format using user's timezone

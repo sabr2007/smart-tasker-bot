@@ -207,7 +207,7 @@ async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
         return "У пользователя нет активных задач."
     
     lines = []
-    for task_id, text, due_at in tasks:
+    for task_id, text, due_at, is_recurring in tasks:
         if due_at:
             due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
             lines.append(f"ID {task_id}: {text} | Дедлайн: {due_str}")
@@ -392,7 +392,7 @@ async def _execute_show_tasks(
     
     filtered_tasks = []
     
-    for task_id, text, due_at in tasks:
+    for task_id, text, due_at, is_recurring in tasks:
         if filter_type == "all":
             filtered_tasks.append((task_id, text, due_at))
         
@@ -435,7 +435,7 @@ async def _execute_show_tasks(
         return f"Нет задач {filter_names.get(filter_type, '')}."
     
     lines = []
-    for task_id, text, due_at in filtered_tasks:
+    for task_id, text, due_at, is_recurring in filtered_tasks:
         if due_at:
             due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
             lines.append(f"ID {task_id}: {text} | {due_str}")
