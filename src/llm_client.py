@@ -551,10 +551,19 @@ async def run_agent_turn(
         final_response = message.content or "Готово!"
         
         # Build clean history for future turns (without system prompt)
-        updated_history = [
-            msg for msg in messages[1:]  # Skip system prompt
-            if msg.get("role") in ("user", "assistant") and msg.get("content")
-        ]
+        # IMPORTANT: Only keep user messages and assistant messages WITHOUT tool_calls
+        # to avoid "tool_calls must be followed by tool messages" errors
+        updated_history = []
+        for msg in messages[1:]:  # Skip system prompt
+            role = msg.get("role")
+            content = msg.get("content")
+            tool_calls = msg.get("tool_calls")
+            
+            if role == "user" and content:
+                updated_history.append({"role": "user", "content": content})
+            elif role == "assistant" and content and not tool_calls:
+                # Only keep assistant messages that have content and NO tool_calls
+                updated_history.append({"role": "assistant", "content": content})
         
         return final_response, updated_history
     
