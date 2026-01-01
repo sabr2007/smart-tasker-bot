@@ -74,12 +74,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     logger.info("Agent: Incoming text from user %s: %r", user_id, text[:100])
     
-    # --- 0. Quick keyboard button handling (bypass AI for simple commands) ---
-    if text in ("Мои задачи", "Показать задачи"):
-        from bot.services import send_tasks_list
-        await send_tasks_list(chat_id, user_id, context)
-        return
- 
+
     # --- 1. Rate limit check ---
     is_allowed, wait_seconds = check_rate_limit(user_id)
     if not is_allowed:
