@@ -2,7 +2,7 @@
 
 **Introduction**
 
-I am a first-year student specializing in **Big Data Analysis**, and this is my first major project. Originally designed as a personal tool to help organize my academic and daily life, it has evolved into a fully functional intelligent assistant.
+I am a first-year student specializing in **Big Data Analysis**, and this is my first project. Originally designed as a personal tool to help organize my academic and daily life, it has evolved into a functional intelligent assistant.
 
 **Project Overview**
 
