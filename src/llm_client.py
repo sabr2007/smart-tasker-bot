@@ -477,13 +477,14 @@ async def run_agent_turn(
                 temperature=0.3,
             )
         except Exception as e:
-            logger.exception("OpenAI API error")
-            # Preserve history on error (skip system prompt which is messages[0])
-            preserved_history = [
-                msg for msg in messages[1:]
-                if msg.get("role") in ("user", "assistant") and msg.get("content")
-            ]
-            return "Произошла ошибка при обработке запроса. Попробуй позже.", preserved_history
+            error_type = type(e).__name__
+            logger.error(
+                "OpenAI API error for user %d: %s: %s. Messages count: %d",
+                user_id, error_type, str(e)[:200], len(messages)
+            )
+            # Clear history on error to prevent cascading failures
+            # User can start fresh with next message
+            return f"Произошла ошибка при обработке запроса ({error_type}). Попробуй ещё раз.", []
         
         message = response.choices[0].message
         

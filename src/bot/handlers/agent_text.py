@@ -36,7 +36,7 @@ def _strip_markdown(text: str) -> str:
 # Store conversation history per user (in-memory, limited)
 # In production, consider using Redis or database
 _user_histories: dict[int, list[dict]] = {}
-MAX_HISTORY_PER_USER = 20
+MAX_HISTORY_PER_USER = 10  # Reduced to prevent token limit issues
 
 
 def _get_user_history(user_id: int) -> list[dict]:
