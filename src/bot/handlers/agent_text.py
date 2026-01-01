@@ -20,6 +20,19 @@ from llm_client import run_agent_turn
 
 logger = logging.getLogger(__name__)
 
+
+def _strip_markdown(text: str) -> str:
+    """Remove common Markdown formatting that Telegram doesn't render well."""
+    import re
+    # Remove **bold** and __bold__
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Remove *italic* and _italic_ 
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', text)
+    text = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', text)
+    return text
+
+
 # Store conversation history per user (in-memory, limited)
 # In production, consider using Redis or database
 _user_histories: dict[int, list[dict]] = {}
@@ -106,6 +119,9 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # --- 7. Send response ---
     if response:
+        # Strip Markdown formatting that Telegram doesn't render
+        response = _strip_markdown(response)
+        
         # Limit response length for Telegram
         if len(response) > 4000:
             response = response[:3997] + "..."
@@ -113,7 +129,6 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(
             response,
             reply_markup=MAIN_KEYBOARD,
-            parse_mode=None,  # Let Telegram auto-detect
         )
     else:
         await update.message.reply_text(
@@ -198,6 +213,8 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         _update_user_history(user_id, updated_history)
         
         if response:
+            # Strip Markdown formatting
+            response = _strip_markdown(response)
             if len(response) > 4000:
                 response = response[:3997] + "..."
             await update.message.reply_text(
