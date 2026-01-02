@@ -178,6 +178,8 @@ async def init_db():
             await conn.execute("ALTER TABLE tasks ADD COLUMN attachment_file_id TEXT")
         if "attachment_type" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN attachment_type TEXT")
+        if "send_attachment_with_reminder" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN send_attachment_with_reminder BOOLEAN DEFAULT TRUE")
 
         # --- Indexes for performance ---
         await conn.execute("""
@@ -290,6 +292,7 @@ async def add_task(
     origin_user_name: Optional[str] = None,
     attachment_file_id: Optional[str] = None,
     attachment_type: Optional[str] = None,
+    send_attachment_with_reminder: bool = True,
 ) -> int:
     """Adds a task and returns its ID."""
     remind_at_iso = due_at_iso if due_at_iso else None
@@ -297,11 +300,11 @@ async def add_task(
     async with get_connection() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
             """,
-            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type,
+            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder,
         )
         return int(row["id"])
 
@@ -395,19 +398,19 @@ async def get_task_reminder_settings(
 async def get_task_attachment(
     user_id: int,
     task_id: int,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], bool]:
     """
-    Returns (attachment_file_id, attachment_type) for a task
-    or (None, None) if not found or no attachment.
+    Returns (attachment_file_id, attachment_type, send_with_reminder) for a task
+    or (None, None, False) if not found or no attachment.
     """
     async with get_connection() as conn:
         row = await conn.fetchrow(
-            "SELECT attachment_file_id, attachment_type FROM tasks WHERE id = $1 AND user_id = $2",
+            "SELECT attachment_file_id, attachment_type, COALESCE(send_attachment_with_reminder, TRUE) as send_with_reminder FROM tasks WHERE id = $1 AND user_id = $2",
             task_id, user_id,
         )
     if not row:
-        return None, None
-    return row["attachment_file_id"], row["attachment_type"]
+        return None, None, False
+    return row["attachment_file_id"], row["attachment_type"], row["send_with_reminder"]
 
 
 async def update_task_reminder_settings(

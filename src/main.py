@@ -79,7 +79,7 @@ def main():
             )
 
             # Inject cancel reminder callback for agent tools
-            from llm_client import set_cancel_reminder_callback, set_schedule_reminder_callback
+            from llm_client import set_cancel_reminder_callback, set_schedule_reminder_callback, set_send_attachment_callback
             from bot.jobs import cancel_task_reminder_by_id, schedule_task_reminder
             set_cancel_reminder_callback(lambda tid: cancel_task_reminder_by_id(tid, app.job_queue))
             set_schedule_reminder_callback(
@@ -87,6 +87,16 @@ def main():
                     app.job_queue, tid, text, deadline, uid
                 )
             )
+            
+            # Inject send attachment callback
+            async def send_attachment_to_user(chat_id: int, file_id: str, att_type: str):
+                if att_type == "pdf":
+                    await app.bot.send_document(chat_id, file_id, caption="📎 Ваш файл")
+                elif att_type == "photo":
+                    await app.bot.send_photo(chat_id, file_id, caption="📎 Ваше фото")
+                else:
+                    await app.bot.send_document(chat_id, file_id, caption="📎 Ваш файл")
+            set_send_attachment_callback(send_attachment_to_user)
 
             # 4. Регистрируем хэндлеры
             # текстовые сообщения (AI Agent)

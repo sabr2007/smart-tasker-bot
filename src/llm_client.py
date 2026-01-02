@@ -77,6 +77,7 @@ def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
 7. show_tasks(filter, date?) — показать задачи с фильтром
 8. set_task_recurring(task_id, recurrence_type, interval?, end_date?) — сделать задачу повторяющейся
 9. remove_task_recurrence(task_id) — отключить повторение задачи
+10. get_attachment(task_id) — отправить пользователю прикреплённый файл (билет, PDF, фото)
 
 ## КРИТИЧЕСКИЕ ПРАВИЛА:
 
@@ -151,6 +152,8 @@ async def execute_tool(
             # Get attachment info from extra_context
             attachment_file_id = (extra_context or {}).get("attachment_file_id")
             attachment_type = (extra_context or {}).get("attachment_type")
+            # Default to True for single-file sources (pdf), False for multi-task sources (screenshot)
+            send_with_reminder = (extra_context or {}).get("send_attachment_with_reminder", True)
             
             return await _execute_add_task(
                 user_id,
@@ -161,6 +164,7 @@ async def execute_tool(
                 origin_user_name=origin_user_name,
                 attachment_file_id=attachment_file_id,
                 attachment_type=attachment_type,
+                send_attachment_with_reminder=send_with_reminder,
             )
         
         elif tool_name == "complete_task":
@@ -209,6 +213,13 @@ async def execute_tool(
                 arguments.get("task_id"),
             )
         
+        elif tool_name == "get_attachment":
+            return await _execute_get_attachment(
+                user_id,
+                arguments.get("task_id"),
+                extra_context,
+            )
+        
         else:
             return f"Ошибка: неизвестный инструмент '{tool_name}'"
     
@@ -251,6 +262,7 @@ async def _execute_add_task(
     origin_user_name: Optional[str] = None,
     attachment_file_id: Optional[str] = None,
     attachment_type: Optional[str] = None,
+    send_attachment_with_reminder: bool = True,
 ) -> str:
     """Create a new task."""
     if not text or not text.strip():
@@ -271,6 +283,7 @@ async def _execute_add_task(
         origin_user_name=origin_user_name,
         attachment_file_id=attachment_file_id,
         attachment_type=attachment_type,
+        send_attachment_with_reminder=send_attachment_with_reminder,
     )
     
     # Schedule reminder if deadline is set
@@ -569,6 +582,51 @@ async def _execute_remove_task_recurrence(
         return f"Ошибка: не удалось отключить повторение для задачи с ID {task_id}."
     
     return f"Повторение задачи '{task[1]}' отключено ✓"
+
+
+# Callback for sending attachments (injected from main.py)
+_send_attachment_callback: Callable[[int, str, str], None] | None = None
+
+
+def set_send_attachment_callback(callback: Callable[[int, str, str], None]) -> None:
+    """Set callback to send attachments. Called from main.py on startup.
+    
+    Callback signature: (chat_id, file_id, attachment_type)
+    """
+    global _send_attachment_callback
+    _send_attachment_callback = callback
+
+
+async def _execute_get_attachment(
+    user_id: int,
+    task_id: Optional[int],
+    extra_context: Optional[dict],
+) -> str:
+    """Get and send attachment for a task."""
+    if task_id is None:
+        return "Ошибка: не указан ID задачи."
+    
+    # Check if task exists
+    task = await db.get_task(user_id, task_id)
+    if not task:
+        return f"Ошибка: задача с ID {task_id} не найдена."
+    
+    # Get attachment
+    file_id, att_type, _ = await db.get_task_attachment(user_id, task_id)
+    
+    if not file_id:
+        return f"К задаче '{task[1]}' не прикреплён файл."
+    
+    # Send file via callback
+    if _send_attachment_callback:
+        try:
+            await _send_attachment_callback(user_id, file_id, att_type or "document")
+            return f"Файл к задаче '{task[1]}' отправлен 📎"
+        except Exception as e:
+            logger.error("Failed to send attachment: %s", e)
+            return "Ошибка при отправке файла."
+    else:
+        return "Функция отправки файлов не настроена."
 
 
 # ============================================================

@@ -40,6 +40,7 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Ensure task is still active and remind_at matches (avoid race conditions with WebApp)
     attachment_file_id = None
     attachment_type = None
+    send_with_reminder = False
     
     if tid > 0:
         async with db.get_connection() as conn:
@@ -56,8 +57,8 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info(f"Skipping reminder for task {tid}: remind_at changed from {scheduled_remind_at} to {current_remind_at}")
             return
         
-        # Get attachment info
-        attachment_file_id, attachment_type = await db.get_task_attachment(chat_id, tid)
+        # Get attachment info (including send_with_reminder flag)
+        attachment_file_id, attachment_type, send_with_reminder = await db.get_task_attachment(chat_id, tid)
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -70,8 +71,8 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=snooze_keyboard(tid) if tid > 0 else None,
     )
     
-    # Send attachment if exists
-    if attachment_file_id:
+    # Send attachment if exists AND flag is set
+    if attachment_file_id and send_with_reminder:
         try:
             if attachment_type == "pdf":
                 await context.bot.send_document(

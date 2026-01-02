@@ -252,6 +252,26 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_attachment",
+            "description": (
+                "Отправить пользователю прикреплённый файл (PDF, фото) к задаче. "
+                "Используй когда пользователь просит отправить билет, документ или файл."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "ID задачи с прикреплённым файлом",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 
