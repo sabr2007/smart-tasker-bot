@@ -610,6 +610,12 @@ async def run_agent_turn(
     if image_bytes:
         # Encode image to Base64 for GPT-4o Vision
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        
+        # Determine MIME type dynamically
+        import imghdr
+        img_type = imghdr.what(None, h=image_bytes)
+        mime_type = f"image/{img_type}" if img_type else "image/jpeg"
+        
         user_content: Union[str, list] = [
             {
                 "type": "text", 
@@ -618,7 +624,7 @@ async def run_agent_turn(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_b64}",
+                    "url": f"data:{mime_type};base64,{image_b64}",
                     "detail": "high"  # High detail for reading text
                 }
             }

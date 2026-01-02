@@ -12,6 +12,8 @@ from time_utils import now_utc
 
 # Database URL from Railway (e.g. postgresql://user:pass@host:port/dbname)
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL не задан в переменных окружения")
 
 # Connection pool (initialized on startup)
 _pool: Optional[asyncpg.Pool] = None
@@ -170,6 +172,24 @@ async def init_db():
             await conn.execute("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'text'")
         if "origin_user_name" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN origin_user_name TEXT")
+
+        # --- Indexes for performance ---
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_user_status 
+            ON tasks(user_id, status)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_due_at 
+            ON tasks(due_at) WHERE due_at IS NOT NULL
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_remind_at 
+            ON tasks(remind_at) WHERE remind_at IS NOT NULL
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_user_id 
+            ON events(user_id)
+        """)
 
 
 # ======== USER SETTINGS (Timezone) ========

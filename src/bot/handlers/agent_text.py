@@ -7,6 +7,7 @@ to process user messages. The agent can autonomously call tools to get
 context before executing actions.
 """
 
+import io
 import logging
 from io import BytesIO
 from typing import Optional
@@ -20,6 +21,25 @@ from bot.rate_limiter import check_rate_limit
 from llm_client import run_agent_turn
 
 logger = logging.getLogger(__name__)
+
+# OpenAI Vision limits
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_DIMENSION = 2048
+
+
+def resize_image_if_needed(image_bytes: bytes) -> bytes:
+    """Сжимает изображение если превышает лимиты OpenAI Vision."""
+    if len(image_bytes) <= MAX_IMAGE_SIZE:
+        return image_bytes
+    
+    from PIL import Image
+    
+    img = Image.open(io.BytesIO(image_bytes))
+    img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
+    
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=85)
+    return buffer.getvalue()
 
 
 def _strip_markdown(text: str) -> str:
@@ -193,6 +213,7 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     import tempfile
     import os
     
+    tmp_path = None
     try:
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
@@ -205,12 +226,6 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Transcribe
         from llm_client import transcribe_audio
         text = await transcribe_audio(tmp_path)
-        
-        # Clean up
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
         
         if not text:
             await update.message.reply_text(
@@ -257,6 +272,13 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "😔 Ошибка при обработке голосового сообщения.",
             reply_markup=MAIN_KEYBOARD,
         )
+    finally:
+        # Гарантированная очистка временного файла
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,12 +318,32 @@ async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Download to memory (not disk)
         buffer = BytesIO()
         await file.download_to_memory(buffer)
-        image_bytes = buffer.getvalue()
+        image_bytes = resize_image_if_needed(buffer.getvalue())
         
         logger.info("Agent: Downloaded photo (%d bytes) from user %s", len(image_bytes), user_id)
         
         # Caption = user text (if any)
         caption = update.message.caption or ""
+        
+        # Detect forwarded media
+        origin_name = ""
+        source = "photo"
+        
+        if update.message.forward_origin:
+            source = "forward_photo"
+            origin = update.message.forward_origin
+            if hasattr(origin, "sender_user") and origin.sender_user:
+                origin_name = origin.sender_user.full_name
+            elif hasattr(origin, "sender_user_name"):
+                origin_name = origin.sender_user_name
+            elif hasattr(origin, "chat") and origin.chat:
+                origin_name = origin.chat.title
+        
+        # Inject context for forwarded photos
+        if origin_name:
+            caption = f"Это пересланное фото от {origin_name}. {caption}".strip()
+        
+        extra_context = {"source": source, "origin_user_name": origin_name or None}
         
         # Get user settings and history
         user_timezone = await db.get_user_timezone(user_id)
@@ -314,7 +356,7 @@ async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 user_id=user_id,
                 user_timezone=user_timezone,
                 history=history,
-                extra_context={"source": "photo"},
+                extra_context=extra_context,
                 image_bytes=image_bytes,
             )
         except Exception as e:
