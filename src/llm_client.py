@@ -599,7 +599,12 @@ async def run_agent_turn(
     
     # Add history if provided (limited to last N messages)
     if history:
-        messages.extend(history[-10:])  # Keep last 10 messages for context
+        # Validate history entries - must be dicts with 'role' and 'content'
+        valid_history = [
+            msg for msg in history[-10:]
+            if isinstance(msg, dict) and "role" in msg and "content" in msg
+        ]
+        messages.extend(valid_history)
     
     # Build user message content (text or multimodal)
     if image_bytes:
