@@ -150,12 +150,16 @@ async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _remind_at, offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
     cancel_task_reminder(task_id, context)
+    
+    # Обновляем и remind_at, и due_at чтобы LLM показывал актуальный дедлайн
+    await db.update_task_due(user_id, task_id, remind_iso)
     await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
+    
     schedule_task_reminder(
         context.job_queue,
         task_id=task_id,
         task_text=task_text or "задача",
-        deadline_iso=due_at,
+        deadline_iso=remind_iso,  # Используем новый дедлайн
         chat_id=chat_id,
         remind_at_iso=remind_iso,
     )
