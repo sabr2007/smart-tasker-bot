@@ -104,6 +104,26 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # --- 4. Get conversation history ---
     history = await _get_user_history(user_id)
     
+    # --- 4.5 Neural Inbox: Detect forwarded messages ---
+    origin_name = ""
+    source = "text"
+    
+    if update.message.forward_origin:
+        source = "forward"
+        origin = update.message.forward_origin
+        if hasattr(origin, "sender_user") and origin.sender_user:
+            origin_name = origin.sender_user.full_name
+        elif hasattr(origin, "sender_user_name"):
+            origin_name = origin.sender_user_name
+        elif hasattr(origin, "chat") and origin.chat:
+            origin_name = origin.chat.title
+    
+    # Inject context for forwarded messages
+    if origin_name:
+        text = f"Это пересланное сообщение от {origin_name}. Текст задачи: {text}"
+    
+    extra_context = {"source": source, "origin_user_name": origin_name or None}
+    
     # --- 5. Run AI Agent ---
     try:
         response, updated_history = await run_agent_turn(
@@ -111,6 +131,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
             user_id=user_id,
             user_timezone=user_timezone,
             history=history,
+            extra_context=extra_context,
         )
     except Exception as e:
         logger.exception("Agent error for user %s: %s", user_id, e)
@@ -214,6 +235,7 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
             user_id=user_id,
             user_timezone=user_timezone,
             history=history,
+            extra_context={"source": "voice"},
         )
         
         await _update_user_history(user_id, updated_history)

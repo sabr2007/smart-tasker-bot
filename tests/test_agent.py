@@ -92,8 +92,8 @@ class TestToolExecutors:
         from llm_client import _execute_get_tasks
         
         mock_db.get_tasks = AsyncMock(return_value=[
-            (1, "Buy milk", "2025-01-15T10:00:00Z"),
-            (2, "Call John", None),
+            (1, "Buy milk", "2025-01-15T10:00:00Z", False, None),
+            (2, "Call John", None, False, "Alice"),
         ])
         
         result = await _execute_get_tasks(user_id=123, user_timezone="Asia/Almaty")
@@ -141,7 +141,7 @@ class TestToolExecutors:
         """delete_task should delete and return confirmation."""
         from llm_client import _execute_delete_task
         
-        mock_db.get_task = AsyncMock(return_value=(5, "Buy milk", None))
+        mock_db.get_task = AsyncMock(return_value=(5, "Buy milk", None, False))
         mock_db.delete_task = AsyncMock()
         
         result = await _execute_delete_task(user_id=123, task_id=5)
@@ -167,7 +167,7 @@ class TestToolExecutors:
         """complete_task should mark task as done."""
         from llm_client import _execute_complete_task
         
-        mock_db.get_task = AsyncMock(return_value=(5, "Buy milk", None))
+        mock_db.get_task = AsyncMock(return_value=(5, "Buy milk", None, False))
         mock_db.set_task_done = AsyncMock(return_value=(True, None))  # Returns tuple now
         
         result = await _execute_complete_task(user_id=123, task_id=5)
@@ -181,7 +181,7 @@ class TestToolExecutors:
         """rename_task should update task text."""
         from llm_client import _execute_rename_task
         
-        mock_db.get_task = AsyncMock(return_value=(5, "Old text", None))
+        mock_db.get_task = AsyncMock(return_value=(5, "Old text", None, False))
         mock_db.update_task_text = AsyncMock()
         
         result = await _execute_rename_task(
@@ -199,7 +199,7 @@ class TestToolExecutors:
         """update_deadline with action=remove should clear deadline."""
         from llm_client import _execute_update_deadline
         
-        mock_db.get_task = AsyncMock(return_value=(5, "Task", "2025-01-15T10:00:00Z"))
+        mock_db.get_task = AsyncMock(return_value=(5, "Task", "2025-01-15T10:00:00Z", False))
         mock_db.update_task_due = AsyncMock()
         mock_db.update_task_reminder_settings = AsyncMock()  # Added missing mock
         

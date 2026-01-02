@@ -167,7 +167,7 @@ class TestRecurringToolExecutors:
         """set_task_recurring should set daily recurrence."""
         from llm_client import _execute_set_task_recurring
         
-        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z"))
+        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z", True))
         mock_db.set_task_recurrence = AsyncMock(return_value=True)
         
         result = await _execute_set_task_recurring(
@@ -224,7 +224,7 @@ class TestRecurringToolExecutors:
         """remove_task_recurrence should remove recurrence."""
         from llm_client import _execute_remove_task_recurrence
         
-        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z"))
+        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z", True))
         mock_db.remove_task_recurrence = AsyncMock(return_value=True)
         
         result = await _execute_remove_task_recurrence(user_id=123, task_id=1)
@@ -238,8 +238,8 @@ class TestRecurringToolExecutors:
         from llm_client import _execute_complete_task, set_schedule_reminder_callback
         
         mock_db.get_task = AsyncMock(side_effect=[
-            (1, "Test task", "2026-01-01T10:00:00Z"),  # First call - original task
-            (2, "Test task", "2026-01-02T10:00:00Z"),  # Second call - new occurrence
+            (1, "Test task", "2026-01-01T10:00:00Z", True),  # First call - original task
+            (2, "Test task", "2026-01-02T10:00:00Z", True),  # Second call - new occurrence
         ])
         mock_db.set_task_done = AsyncMock(return_value=(True, 2))  # Returns new_task_id=2
         
@@ -258,7 +258,7 @@ class TestRecurringToolExecutors:
         """complete_task should not schedule new occurrence for non-recurring task."""
         from llm_client import _execute_complete_task, set_schedule_reminder_callback
         
-        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z"))
+        mock_db.get_task = AsyncMock(return_value=(1, "Test task", "2026-01-01T10:00:00Z", False))
         mock_db.set_task_done = AsyncMock(return_value=(True, None))  # No new task
         
         schedule_callback = AsyncMock()

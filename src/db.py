@@ -165,6 +165,12 @@ async def init_db():
         if "recurrence_end_date" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN recurrence_end_date TEXT")
 
+        # Neural Inbox columns for task source tracking
+        if "source" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN source TEXT DEFAULT 'text'")
+        if "origin_user_name" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN origin_user_name TEXT")
+
 
 # ======== USER SETTINGS (Timezone) ========
 
@@ -254,6 +260,8 @@ async def add_task(
     text: str,
     due_at_iso: Optional[str] = None,
     category: Optional[str] = None,
+    source: str = "text",
+    origin_user_name: Optional[str] = None,
 ) -> int:
     """Adds a task and returns its ID."""
     remind_at_iso = due_at_iso if due_at_iso else None
@@ -261,24 +269,24 @@ async def add_task(
     async with get_connection() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id
             """,
-            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category,
+            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name,
         )
         return int(row["id"])
 
 
-async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool]]:
+async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, Optional[str]]]:
     """
-    Returns list of active tasks: (id, text, due_at, is_recurring).
+    Returns list of active tasks: (id, text, due_at, is_recurring, origin_user_name).
     Sorted: tasks with deadlines first (ascending), then others.
     """
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring
+            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, origin_user_name
             FROM tasks
             WHERE user_id = $1
               AND (status IS NULL OR status = 'active')
@@ -289,7 +297,7 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool]]:
             """,
             user_id,
         )
-        return [(row["id"], row["text"], row["due_at"], row["is_recurring"]) for row in rows]
+        return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"]) for row in rows]
 
 
 async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool]]:

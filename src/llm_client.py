@@ -125,23 +125,35 @@ async def execute_tool(
     arguments: dict[str, Any],
     user_id: int,
     user_timezone: str,
+    extra_context: Optional[dict] = None,
 ) -> str:
     """
     Execute a tool and return the result as a string.
     
     All database operations are wrapped in try/except to provide
     friendly error messages to the agent.
+    
+    Args:
+        extra_context: Additional context from handler (source, origin_user_name)
     """
     try:
         if tool_name == "get_tasks":
             return await _execute_get_tasks(user_id, user_timezone)
         
         elif tool_name == "add_task":
+            # Get source from extra_context (passed from handler)
+            source = (extra_context or {}).get("source", "text")
+            origin_from_context = (extra_context or {}).get("origin_user_name")
+            # LLM can also extract origin_user_name from message context
+            origin_user_name = arguments.get("origin_user_name") or origin_from_context
+            
             return await _execute_add_task(
                 user_id,
                 arguments.get("text", ""),
                 arguments.get("deadline"),
                 user_timezone,
+                source=source,
+                origin_user_name=origin_user_name,
             )
         
         elif tool_name == "complete_task":
@@ -206,12 +218,19 @@ async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
         return "У пользователя нет активных задач."
     
     lines = []
-    for task_id, text, due_at, is_recurring in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name in tasks:
+        parts = [f"ID {task_id}: {text}"]
+        
         if due_at:
             due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
-            lines.append(f"ID {task_id}: {text} | Дедлайн: {due_str}")
+            parts.append(f"Дедлайн: {due_str}")
         else:
-            lines.append(f"ID {task_id}: {text} | Без дедлайна")
+            parts.append("Без дедлайна")
+        
+        if origin_user_name:
+            parts.append(f"от {origin_user_name}")
+        
+        lines.append(" | ".join(parts))
     
     return "Список задач:\n" + "\n".join(lines)
 
@@ -221,6 +240,8 @@ async def _execute_add_task(
     text: str,
     deadline: Optional[str],
     user_timezone: str,
+    source: str = "text",
+    origin_user_name: Optional[str] = None,
 ) -> str:
     """Create a new task."""
     if not text or not text.strip():
@@ -233,7 +254,13 @@ async def _execute_add_task(
         if not deadline_utc:
             return f"Ошибка: неверный формат дедлайна '{deadline}'. Используй ISO 8601."
     
-    task_id = await db.add_task(user_id, text.strip(), deadline_utc)
+    task_id = await db.add_task(
+        user_id, 
+        text.strip(), 
+        deadline_utc,
+        source=source,
+        origin_user_name=origin_user_name,
+    )
     
     # Schedule reminder if deadline is set
     if deadline_utc and _schedule_reminder_callback:
@@ -391,9 +418,9 @@ async def _execute_show_tasks(
     
     filtered_tasks = []
     
-    for task_id, text, due_at, is_recurring in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name in tasks:
         if filter_type == "all":
-            filtered_tasks.append((task_id, text, due_at, is_recurring))
+            filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
         elif filter_type == "today":
             if due_at:
@@ -402,7 +429,7 @@ async def _execute_show_tasks(
                     # Convert to user's timezone for comparison
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == today:
-                        filtered_tasks.append((task_id, text, due_at, is_recurring))
+                        filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
         elif filter_type == "tomorrow":
             if due_at:
@@ -410,7 +437,7 @@ async def _execute_show_tasks(
                 if dt:
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == tomorrow:
-                        filtered_tasks.append((task_id, text, due_at, is_recurring))
+                        filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
         elif filter_type == "date" and date_str:
             try:
@@ -420,7 +447,7 @@ async def _execute_show_tasks(
                     if dt:
                         local_dt = utc_to_local(dt, user_timezone)
                         if local_dt and local_dt.date() == target_date:
-                            filtered_tasks.append((task_id, text, due_at, is_recurring))
+                            filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
             except ValueError:
                 return f"Ошибка: неверный формат даты '{date_str}'. Используй YYYY-MM-DD."
     
@@ -434,12 +461,17 @@ async def _execute_show_tasks(
         return f"Нет задач {filter_names.get(filter_type, '')}."
     
     lines = []
-    for task_id, text, due_at, is_recurring in filtered_tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name in filtered_tasks:
+        parts = [f"ID {task_id}: {text}"]
+        
         if due_at:
             due_str = format_deadline_in_tz(due_at, user_timezone) or due_at
-            lines.append(f"ID {task_id}: {text} | {due_str}")
-        else:
-            lines.append(f"ID {task_id}: {text}")
+            parts.append(due_str)
+        
+        if origin_user_name:
+            parts.append(f"от {origin_user_name}")
+        
+        lines.append(" | ".join(parts))
     
     filter_headers = {
         "all": "Все активные задачи",
@@ -534,6 +566,7 @@ async def run_agent_turn(
     user_id: int,
     user_timezone: str,
     history: Optional[list[dict]] = None,
+    extra_context: Optional[dict] = None,
 ) -> tuple[str, list[dict]]:
     """
     Run one turn of the AI agent conversation.
@@ -548,6 +581,7 @@ async def run_agent_turn(
         user_id: Telegram user ID
         user_timezone: User's IANA timezone
         history: Previous conversation history (optional)
+        extra_context: Handler context (source, origin_user_name)
     
     Returns:
         Tuple of (agent_response, updated_history)
@@ -638,7 +672,7 @@ async def run_agent_turn(
                 
                 # Execute tool
                 tool_result = await execute_tool(
-                    tool_name, arguments, user_id, user_timezone
+                    tool_name, arguments, user_id, user_timezone, extra_context
                 )
                 
                 logger.info("Tool result: %s", tool_result[:200])
