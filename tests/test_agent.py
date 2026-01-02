@@ -288,50 +288,59 @@ class TestAgentSystemPrompt:
 class TestAgentHistory:
     """Test conversation history management."""
     
-    def test_get_user_history_empty(self):
-        """Should return empty list for new user."""
-        from bot.handlers.agent_text import _get_user_history, _user_histories
+    @pytest.mark.asyncio
+    async def test_get_user_history_empty(self):
+        """Should return empty list for new user (with mocked DB)."""
+        from bot.handlers.agent_text import _get_user_history, _user_histories_cache
         
-        # Clear any existing history
-        _user_histories.clear()
+        # Clear cache
+        _user_histories_cache.clear()
         
-        history = _get_user_history(999999)
-        assert history == []
+        # Mock DB to return empty
+        with patch('db.get_conversation_history', new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = []
+            history = await _get_user_history(999999)
+            assert history == []
     
-    def test_update_user_history(self):
-        """Should store and retrieve history."""
+    @pytest.mark.asyncio
+    async def test_update_user_history(self):
+        """Should store and retrieve history (with mocked DB)."""
         from bot.handlers.agent_text import (
             _get_user_history,
             _update_user_history,
-            _user_histories,
+            _user_histories_cache,
         )
         
-        _user_histories.clear()
+        _user_histories_cache.clear()
         
         test_history = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi!"},
         ]
         
-        _update_user_history(12345, test_history)
+        with patch('db.set_conversation_history', new_callable=AsyncMock) as mock_set:
+            await _update_user_history(12345, test_history)
+            mock_set.assert_called_once()
         
-        retrieved = _get_user_history(12345)
-        assert len(retrieved) == 2
-        assert retrieved[0]["content"] == "Hello"
+        # Check cache was updated
+        assert len(_user_histories_cache.get(12345, [])) == 2
     
-    def test_clear_user_history(self):
-        """Should clear history for user."""
+    @pytest.mark.asyncio
+    async def test_clear_user_history(self):
+        """Should clear history for user (with mocked DB)."""
         from bot.handlers.agent_text import (
-            _get_user_history,
             _update_user_history,
             clear_user_history,
-            _user_histories,
+            _user_histories_cache,
         )
         
-        _user_histories.clear()
+        _user_histories_cache.clear()
         
-        _update_user_history(12345, [{"role": "user", "content": "Test"}])
-        assert len(_get_user_history(12345)) == 1
+        # Set some history in cache
+        _user_histories_cache[12345] = [{"role": "user", "content": "Test"}]
         
-        clear_user_history(12345)
-        assert _get_user_history(12345) == []
+        with patch('db.clear_conversation_history', new_callable=AsyncMock) as mock_clear:
+            await clear_user_history(12345)
+            mock_clear.assert_called_once_with(12345)
+        
+        assert 12345 not in _user_histories_cache

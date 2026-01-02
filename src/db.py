@@ -119,6 +119,17 @@ async def init_db():
             """
         )
 
+        # Create conversation_history table for AI agent context persistence
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversation_history (
+                user_id BIGINT PRIMARY KEY,
+                history JSONB NOT NULL DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # --- Migrations (add missing columns) ---
         # Get existing columns for tasks table
         columns = await conn.fetch(
@@ -191,6 +202,51 @@ async def get_user_settings(user_id: int) -> dict:
     """Returns user settings dict with timezone."""
     tz = await get_user_timezone(user_id)
     return {"user_id": user_id, "timezone": tz}
+
+
+# ======== CONVERSATION HISTORY (for AI Agent) ========
+
+MAX_HISTORY_MESSAGES = 10  # Keep last N messages to avoid token limits
+
+
+async def get_conversation_history(user_id: int) -> list[dict]:
+    """Returns conversation history for user as list of message dicts."""
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT history FROM conversation_history WHERE user_id = $1",
+            user_id,
+        )
+    if row and row["history"]:
+        return row["history"]
+    return []
+
+
+async def set_conversation_history(user_id: int, history: list[dict]) -> None:
+    """Saves conversation history for user. Keeps only last N messages."""
+    # Limit history size
+    limited_history = history[-MAX_HISTORY_MESSAGES:] if history else []
+    
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO conversation_history (user_id, history, updated_at)
+            VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                history = EXCLUDED.history,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            user_id,
+            json.dumps(limited_history, ensure_ascii=False),
+        )
+
+
+async def clear_conversation_history(user_id: int) -> None:
+    """Clears conversation history for user."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "DELETE FROM conversation_history WHERE user_id = $1",
+            user_id,
+        )
 
 
 async def add_task(

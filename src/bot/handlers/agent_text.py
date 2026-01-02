@@ -33,29 +33,40 @@ def _strip_markdown(text: str) -> str:
     return text
 
 
-# Store conversation history per user (in-memory, limited)
-# In production, consider using Redis or database
-_user_histories: dict[int, list[dict]] = {}
-MAX_HISTORY_PER_USER = 10  # Reduced to prevent token limit issues
+# Conversation history is now persisted in PostgreSQL (see db.py)
+# In-memory cache for performance (optional, reduces DB calls)
+_user_histories_cache: dict[int, list[dict]] = {}
 
 
-def _get_user_history(user_id: int) -> list[dict]:
-    """Get conversation history for user."""
-    return _user_histories.get(user_id, [])
+async def _get_user_history(user_id: int) -> list[dict]:
+    """Get conversation history for user from database."""
+    # Check cache first
+    if user_id in _user_histories_cache:
+        return _user_histories_cache[user_id]
+    
+    # Load from database
+    history = await db.get_conversation_history(user_id)
+    _user_histories_cache[user_id] = history
+    return history
 
 
-def _update_user_history(user_id: int, history: list[dict]) -> None:
-    """Update conversation history for user, keeping only last N messages."""
-    if history:
-        _user_histories[user_id] = history[-MAX_HISTORY_PER_USER:]
-    elif user_id in _user_histories:
-        del _user_histories[user_id]
+async def _update_user_history(user_id: int, history: list[dict]) -> None:
+    """Update conversation history for user in database."""
+    # Update cache
+    _user_histories_cache[user_id] = history if history else []
+    
+    # Persist to database
+    await db.set_conversation_history(user_id, history)
 
 
-def clear_user_history(user_id: int) -> None:
+async def clear_user_history(user_id: int) -> None:
     """Clear conversation history for user (e.g., on /start command)."""
-    if user_id in _user_histories:
-        del _user_histories[user_id]
+    # Clear cache
+    if user_id in _user_histories_cache:
+        del _user_histories_cache[user_id]
+    
+    # Clear from database
+    await db.clear_conversation_history(user_id)
 
 
 async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,7 +102,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_timezone = await db.get_user_timezone(user_id)
     
     # --- 4. Get conversation history ---
-    history = _get_user_history(user_id)
+    history = await _get_user_history(user_id)
     
     # --- 5. Run AI Agent ---
     try:
@@ -110,7 +121,7 @@ async def handle_agent_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     # --- 6. Update conversation history ---
-    _update_user_history(user_id, updated_history)
+    await _update_user_history(user_id, updated_history)
     
     # --- 7. Send response ---
     if response:
@@ -196,7 +207,7 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Process with agent
         user_timezone = await db.get_user_timezone(user_id)
-        history = _get_user_history(user_id)
+        history = await _get_user_history(user_id)
         
         response, updated_history = await run_agent_turn(
             user_text=text,
@@ -205,7 +216,7 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
             history=history,
         )
         
-        _update_user_history(user_id, updated_history)
+        await _update_user_history(user_id, updated_history)
         
         if response:
             # Strip Markdown formatting

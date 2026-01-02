@@ -33,7 +33,7 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 # --- Handlers ---
 from bot.jobs import send_daily_digest, restore_reminders_job, sync_reminders_job
-from bot.handlers.commands import cmd_broadcast
+from bot.handlers.commands import cmd_start, cmd_broadcast
 from bot.handlers.agent_text import handle_agent_message, handle_agent_voice
 from bot.handlers.callbacks import (
     on_mark_done_menu,
@@ -102,6 +102,7 @@ def main():
             app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
 
             # команды
+            app.add_handler(CommandHandler("start", cmd_start))
             app.add_handler(CommandHandler("broadcast", cmd_broadcast))
 
             # --- УТРЕННИЙ ДАЙДЖЕСТ 07:30 ---
@@ -112,11 +113,13 @@ def main():
                     name="daily_digest",
                 )
                 app.job_queue.run_once(restore_reminders_job, when=0, name="restore_reminders_init")
-                # Periodic sync for WebApp changes (every 5 minutes)
+                # Periodic sync for WebApp changes (every 60 seconds)
+                # Reduced from 5 minutes to ensure recurring task reminders
+                # are scheduled quickly after WebApp completions
                 app.job_queue.run_repeating(
                     sync_reminders_job,
-                    interval=300,  # 5 minutes
-                    first=60,  # First run after 1 minute
+                    interval=60,  # 1 minute (was 5 minutes)
+                    first=10,  # First run after 10 seconds
                     name="sync_reminders",
                 )
 

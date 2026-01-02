@@ -173,8 +173,8 @@ async def complete_task(task_id: int, user=Depends(get_current_user)) -> Dict[st
     # Complete task - may create new occurrence if recurring
     success, new_task_id = await db.set_task_done(user_id, task_id)
     
-    # Note: WebApp completions won't auto-schedule reminders for new occurrences
-    # until bot restarts. This is a known limitation.
+    # Note: Reminders for new recurring occurrences are scheduled by 
+    # sync_reminders_job which runs every 60 seconds in the bot process.
     
     return {"ok": True, "new_task_id": new_task_id}
 
