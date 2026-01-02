@@ -11,28 +11,12 @@ from telegram.ext import ContextTypes
 
 import db
 from bot.keyboards import snooze_keyboard
-from time_utils import now_utc, UTC
+from time_utils import now_utc, UTC, parse_utc_iso
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_utc_deadline(deadline_iso: str | None) -> datetime | None:
-    """Parse ISO deadline string to UTC datetime.
-    
-    Handles both 'Z' suffix and '+00:00' offset for UTC.
-    """
-    if not deadline_iso:
-        return None
-    s = deadline_iso.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
-    except Exception:
-        return None
+
 
 
 async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -115,7 +99,7 @@ def schedule_task_reminder(
     if not job_queue or not when_iso:
         return
 
-    dt = _parse_utc_deadline(when_iso)
+    dt = parse_utc_iso(when_iso)
     if not dt:
         return
 

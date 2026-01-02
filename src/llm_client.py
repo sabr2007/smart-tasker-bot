@@ -23,6 +23,7 @@ from time_utils import (
     now_in_tz,
     format_deadline_in_tz,
     utc_to_local,
+    parse_utc_iso,
 )
 
 
@@ -54,20 +55,7 @@ def set_schedule_reminder_callback(callback: Callable[[int, str, str, int], None
     _schedule_reminder_callback = callback
 
 
-def _parse_utc_iso(iso_str: str | None) -> datetime | None:
-    """Parse UTC ISO string to datetime. Supports 'Z' suffix."""
-    if not iso_str:
-        return None
-    s = iso_str.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
+
 
 
 def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
@@ -409,7 +397,7 @@ async def _execute_show_tasks(
         
         elif filter_type == "today":
             if due_at:
-                dt = _parse_utc_iso(due_at)
+                dt = parse_utc_iso(due_at)
                 if dt:
                     # Convert to user's timezone for comparison
                     local_dt = utc_to_local(dt, user_timezone)
@@ -418,7 +406,7 @@ async def _execute_show_tasks(
         
         elif filter_type == "tomorrow":
             if due_at:
-                dt = _parse_utc_iso(due_at)
+                dt = parse_utc_iso(due_at)
                 if dt:
                     local_dt = utc_to_local(dt, user_timezone)
                     if local_dt and local_dt.date() == tomorrow:
@@ -428,7 +416,7 @@ async def _execute_show_tasks(
             try:
                 target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 if due_at:
-                    dt = _parse_utc_iso(due_at)
+                    dt = parse_utc_iso(due_at)
                     if dt:
                         local_dt = utc_to_local(dt, user_timezone)
                         if local_dt and local_dt.date() == target_date:

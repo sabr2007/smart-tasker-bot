@@ -113,6 +113,26 @@ def normalize_deadline_to_utc(deadline_iso: str | None, tz_name: str) -> str | N
     return utc_dt.isoformat().replace("+00:00", "Z")
 
 
+def parse_utc_iso(iso_str: str | None) -> datetime | None:
+    """Parse UTC ISO string to datetime.
+    
+    Handles both 'Z' suffix and '+00:00' offset for UTC.
+    Returns timezone-aware datetime in UTC or None if parsing fails.
+    """
+    if not iso_str:
+        return None
+    s = iso_str.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    except Exception:
+        return None
+
+
 def format_deadline_in_tz(utc_iso: str | None, tz_name: str, fmt: str = "%d.%m %H:%M") -> str | None:
     """Format UTC deadline for display in user's timezone.
     

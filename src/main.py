@@ -33,7 +33,7 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 # --- Handlers ---
 from bot.jobs import send_daily_digest, restore_reminders_job, sync_reminders_job
-from bot.handlers.commands import cmd_start, cmd_dumpdb, cmd_broadcast
+from bot.handlers.commands import cmd_broadcast
 from bot.handlers.agent_text import handle_agent_message, handle_agent_voice
 from bot.handlers.callbacks import (
     on_mark_done_menu,
@@ -101,9 +101,7 @@ def main():
             app.add_handler(CallbackQueryHandler(on_snooze_prompt, pattern=r"^snooze_prompt:\d+$"))
             app.add_handler(CallbackQueryHandler(on_snooze_quick, pattern=r"^snooze:\d+:(?:5|30|60)$"))
 
-            # команды админа
-            app.add_handler(CommandHandler("start", cmd_start))
-            app.add_handler(CommandHandler("dumpdb", cmd_dumpdb))
+            # команды
             app.add_handler(CommandHandler("broadcast", cmd_broadcast))
 
             # --- УТРЕННИЙ ДАЙДЖЕСТ 07:30 ---
