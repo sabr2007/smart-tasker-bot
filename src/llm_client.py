@@ -8,10 +8,11 @@ This module implements the ReAct (Reasoning + Action) pattern:
 3. If model requests tool_calls -> execute, add result, repeat
 """
 
+import base64
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from openai import AsyncOpenAI
 
@@ -567,6 +568,7 @@ async def run_agent_turn(
     user_timezone: str,
     history: Optional[list[dict]] = None,
     extra_context: Optional[dict] = None,
+    image_bytes: Optional[bytes] = None,
 ) -> tuple[str, list[dict]]:
     """
     Run one turn of the AI agent conversation.
@@ -582,6 +584,7 @@ async def run_agent_turn(
         user_timezone: User's IANA timezone
         history: Previous conversation history (optional)
         extra_context: Handler context (source, origin_user_name)
+        image_bytes: Raw image bytes for GPT-4o Vision (optional)
     
     Returns:
         Tuple of (agent_response, updated_history)
@@ -598,8 +601,28 @@ async def run_agent_turn(
     if history:
         messages.extend(history[-10:])  # Keep last 10 messages for context
     
+    # Build user message content (text or multimodal)
+    if image_bytes:
+        # Encode image to Base64 for GPT-4o Vision
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        user_content: Union[str, list] = [
+            {
+                "type": "text", 
+                "text": user_text or "Проанализируй изображение и извлеки задачи, даты и время."
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_b64}",
+                    "detail": "high"  # High detail for reading text
+                }
+            }
+        ]
+    else:
+        user_content = user_text
+    
     # Add current user message
-    messages.append({"role": "user", "content": user_text})
+    messages.append({"role": "user", "content": user_content})
     
     # ReAct loop
     for iteration in range(MAX_AGENT_ITERATIONS):
@@ -693,6 +716,7 @@ async def run_agent_turn(
         # Build clean history for future turns (without system prompt)
         # IMPORTANT: Only keep user messages and assistant messages WITHOUT tool_calls
         # to avoid "tool_calls must be followed by tool messages" errors
+        # Also strip Base64 image data to prevent memory/token bloat
         updated_history = []
         for msg in messages[1:]:  # Skip system prompt
             role = msg.get("role")
@@ -700,6 +724,11 @@ async def run_agent_turn(
             tool_calls = msg.get("tool_calls")
             
             if role == "user" and content:
+                # Strip Base64 from multimodal messages
+                if isinstance(content, list):
+                    # Extract only text parts, replace image with placeholder
+                    text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                    content = "[Изображение] " + " ".join(text_parts)
                 updated_history.append({"role": "user", "content": content})
             elif role == "assistant" and content and not tool_calls:
                 # Only keep assistant messages that have content and NO tool_calls

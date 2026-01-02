@@ -8,6 +8,7 @@ context before executing actions.
 """
 
 import logging
+from io import BytesIO
 from typing import Optional
 
 from telegram import Update
@@ -254,5 +255,94 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.exception("Voice processing error for user %s: %s", user_id, e)
         await update.message.reply_text(
             "😔 Ошибка при обработке голосового сообщения.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+
+async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle photo messages by analyzing with GPT-4o Vision.
+    
+    Supports:
+    - Screenshots with text (chat screenshots, schedules)
+    - Photos of documents and announcements
+    - Photos with captions
+    """
+    if not update.message or not update.message.photo:
+        return
+    
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    logger.info("Agent: Photo message from user %s", user_id)
+    
+    # Rate limit check
+    is_allowed, wait_seconds = check_rate_limit(user_id)
+    if not is_allowed:
+        await update.message.reply_text(
+            f"⏳ Слишком много запросов. Подожди {wait_seconds} сек.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    
+    # Show typing indicator
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    
+    try:
+        # Get largest photo (last in array - best quality)
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Download to memory (not disk)
+        buffer = BytesIO()
+        await file.download_to_memory(buffer)
+        image_bytes = buffer.getvalue()
+        
+        logger.info("Agent: Downloaded photo (%d bytes) from user %s", len(image_bytes), user_id)
+        
+        # Caption = user text (if any)
+        caption = update.message.caption or ""
+        
+        # Get user settings and history
+        user_timezone = await db.get_user_timezone(user_id)
+        history = await _get_user_history(user_id)
+        
+        # Run agent with image
+        try:
+            response, updated_history = await run_agent_turn(
+                user_text=caption,
+                user_id=user_id,
+                user_timezone=user_timezone,
+                history=history,
+                extra_context={"source": "photo"},
+                image_bytes=image_bytes,
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            # Handle OpenAI Safety System / content policy errors
+            if "content_policy" in error_str or "safety" in error_str:
+                await update.message.reply_text(
+                    "Извини, не могу обработать это изображение из-за политики безопасности AI.",
+                    reply_markup=MAIN_KEYBOARD,
+                )
+                return
+            raise
+        
+        await _update_user_history(user_id, updated_history)
+        
+        if response:
+            # Strip Markdown formatting
+            response = _strip_markdown(response)
+            if len(response) > 4000:
+                response = response[:3997] + "..."
+            await update.message.reply_text(
+                response,
+                reply_markup=MAIN_KEYBOARD,
+            )
+        
+    except Exception as e:
+        logger.exception("Photo processing error for user %s: %s", user_id, e)
+        await update.message.reply_text(
+            "😔 Ошибка при обработке изображения.",
             reply_markup=MAIN_KEYBOARD,
         )

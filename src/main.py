@@ -34,7 +34,7 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 # --- Handlers ---
 from bot.jobs import send_daily_digest, restore_reminders_job, sync_reminders_job
 from bot.handlers.commands import cmd_start, cmd_broadcast
-from bot.handlers.agent_text import handle_agent_message, handle_agent_voice
+from bot.handlers.agent_text import handle_agent_message, handle_agent_voice, handle_agent_photo
 from bot.handlers.callbacks import (
     on_mark_done_menu,
     on_mark_done_select,
@@ -94,6 +94,9 @@ def main():
 
             # голосовые сообщения (AI Agent)
             app.add_handler(MessageHandler(filters.VOICE, handle_agent_voice))
+
+            # фото (GPT-4o Vision)
+            app.add_handler(MessageHandler(filters.PHOTO, handle_agent_photo))
 
             # inline-кнопки
             app.add_handler(CallbackQueryHandler(on_mark_done_menu, pattern=r"^mark_done_menu$"))
