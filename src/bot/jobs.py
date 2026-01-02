@@ -38,6 +38,9 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         tid = 0
 
     # Ensure task is still active and remind_at matches (avoid race conditions with WebApp)
+    attachment_file_id = None
+    attachment_type = None
+    
     if tid > 0:
         async with db.get_connection() as conn:
             task_row = await db._fetch_task_row(conn, chat_id, tid)
@@ -52,6 +55,9 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         if scheduled_remind_at and current_remind_at and scheduled_remind_at != current_remind_at:
             logger.info(f"Skipping reminder for task {tid}: remind_at changed from {scheduled_remind_at} to {current_remind_at}")
             return
+        
+        # Get attachment info
+        attachment_file_id, attachment_type = await db.get_task_attachment(chat_id, tid)
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -63,6 +69,24 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         ),
         reply_markup=snooze_keyboard(tid) if tid > 0 else None,
     )
+    
+    # Send attachment if exists
+    if attachment_file_id:
+        try:
+            if attachment_type == "pdf":
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=attachment_file_id,
+                    caption="📎 Прикреплённый файл к задаче"
+                )
+            elif attachment_type == "photo":
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=attachment_file_id,
+                    caption="📎 Прикреплённое фото к задаче"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to send attachment for task {tid}: {e}")
 
 
 async def send_daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:

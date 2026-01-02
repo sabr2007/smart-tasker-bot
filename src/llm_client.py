@@ -148,6 +148,10 @@ async def execute_tool(
             # LLM can also extract origin_user_name from message context
             origin_user_name = arguments.get("origin_user_name") or origin_from_context
             
+            # Get attachment info from extra_context
+            attachment_file_id = (extra_context or {}).get("attachment_file_id")
+            attachment_type = (extra_context or {}).get("attachment_type")
+            
             return await _execute_add_task(
                 user_id,
                 arguments.get("text", ""),
@@ -155,6 +159,8 @@ async def execute_tool(
                 user_timezone,
                 source=source,
                 origin_user_name=origin_user_name,
+                attachment_file_id=attachment_file_id,
+                attachment_type=attachment_type,
             )
         
         elif tool_name == "complete_task":
@@ -243,6 +249,8 @@ async def _execute_add_task(
     user_timezone: str,
     source: str = "text",
     origin_user_name: Optional[str] = None,
+    attachment_file_id: Optional[str] = None,
+    attachment_type: Optional[str] = None,
 ) -> str:
     """Create a new task."""
     if not text or not text.strip():
@@ -261,17 +269,22 @@ async def _execute_add_task(
         deadline_utc,
         source=source,
         origin_user_name=origin_user_name,
+        attachment_file_id=attachment_file_id,
+        attachment_type=attachment_type,
     )
     
     # Schedule reminder if deadline is set
     if deadline_utc and _schedule_reminder_callback:
         _schedule_reminder_callback(task_id, text.strip(), deadline_utc, user_id)
     
+    # Build response
+    attachment_note = " 📎 Файл сохранён!" if attachment_file_id else ""
+    
     if deadline_utc:
         due_str = format_deadline_in_tz(deadline_utc, user_timezone) or deadline
-        return f"Задача создана (ID {task_id}): '{text}' с дедлайном {due_str}"
+        return f"Задача создана (ID {task_id}): '{text}' с дедлайном {due_str}{attachment_note}"
     else:
-        return f"Задача создана (ID {task_id}): '{text}'"
+        return f"Задача создана (ID {task_id}): '{text}'{attachment_note}"
 
 
 async def _execute_complete_task(user_id: int, task_id: Optional[int]) -> str:

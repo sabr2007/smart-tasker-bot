@@ -388,3 +388,124 @@ async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "😔 Ошибка при обработке изображения.",
             reply_markup=MAIN_KEYBOARD,
         )
+
+
+async def handle_agent_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle document messages (PDF files).
+    
+    Extracts text from PDF and sends to agent for task creation.
+    Saves file_id for later retrieval (e.g., with reminders).
+    """
+    if not update.message or not update.message.document:
+        return
+    
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    document = update.message.document
+    
+    logger.info("Agent: Document from user %s: %s (%s)", 
+                user_id, document.file_name, document.mime_type)
+    
+    # Only handle PDFs for now
+    if document.mime_type != "application/pdf":
+        await update.message.reply_text(
+            "Пока я умею обрабатывать только PDF файлы. "
+            "Отправь PDF или напиши задачу текстом.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    
+    # Rate limit check
+    is_allowed, wait_seconds = check_rate_limit(user_id)
+    if not is_allowed:
+        await update.message.reply_text(
+            f"⏳ Слишком много запросов. Подожди {wait_seconds} сек.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    
+    # Show typing indicator
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    
+    try:
+        # Download PDF to memory
+        file = await context.bot.get_file(document.file_id)
+        buffer = BytesIO()
+        await file.download_to_memory(buffer)
+        pdf_bytes = buffer.getvalue()
+        
+        logger.info("Agent: Downloaded PDF (%d bytes) from user %s", len(pdf_bytes), user_id)
+        
+        # Extract text from PDF
+        from pdf_utils import extract_pdf_text
+        pdf_text = extract_pdf_text(pdf_bytes)
+        
+        if not pdf_text:
+            await update.message.reply_text(
+                "В этом PDF нет текстового слоя (возможно, это скан). "
+                "Напиши задачу словами или отправь скриншот.",
+                reply_markup=MAIN_KEYBOARD,
+            )
+            return
+        
+        # Caption from user (if any)
+        caption = update.message.caption or ""
+        
+        # Build prompt for agent
+        prompt = f"Проанализируй этот документ и создай задачу с датой если есть:\n\n{pdf_text}"
+        if caption:
+            prompt = f"{caption}\n\nТекст документа:\n{pdf_text}"
+        
+        # Detect forwarded documents
+        origin_name = ""
+        source = "pdf"
+        
+        if update.message.forward_origin:
+            source = "forward_pdf"
+            origin = update.message.forward_origin
+            if hasattr(origin, "sender_user") and origin.sender_user:
+                origin_name = origin.sender_user.full_name
+            elif hasattr(origin, "sender_user_name"):
+                origin_name = origin.sender_user_name
+            elif hasattr(origin, "chat") and origin.chat:
+                origin_name = origin.chat.title
+        
+        extra_context = {
+            "source": source,
+            "origin_user_name": origin_name or None,
+            "attachment_file_id": document.file_id,
+            "attachment_type": "pdf",
+        }
+        
+        # Get user settings and history
+        user_timezone = await db.get_user_timezone(user_id)
+        history = await _get_user_history(user_id)
+        
+        # Run agent
+        response, updated_history = await run_agent_turn(
+            user_text=prompt,
+            user_id=user_id,
+            user_timezone=user_timezone,
+            history=history,
+            extra_context=extra_context,
+        )
+        
+        await _update_user_history(user_id, updated_history)
+        
+        if response:
+            response = _strip_markdown(response)
+            if len(response) > 4000:
+                response = response[:3997] + "..."
+            await update.message.reply_text(
+                response,
+                reply_markup=MAIN_KEYBOARD,
+            )
+        
+    except Exception as e:
+        logger.exception("PDF processing error for user %s: %s", user_id, e)
+        await update.message.reply_text(
+            "😔 Ошибка при обработке PDF.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+

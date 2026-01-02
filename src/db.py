@@ -173,6 +173,12 @@ async def init_db():
         if "origin_user_name" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN origin_user_name TEXT")
 
+        # Attachment columns for file storage
+        if "attachment_file_id" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN attachment_file_id TEXT")
+        if "attachment_type" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN attachment_type TEXT")
+
         # --- Indexes for performance ---
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tasks_user_status 
@@ -282,6 +288,8 @@ async def add_task(
     category: Optional[str] = None,
     source: str = "text",
     origin_user_name: Optional[str] = None,
+    attachment_file_id: Optional[str] = None,
+    attachment_type: Optional[str] = None,
 ) -> int:
     """Adds a task and returns its ID."""
     remind_at_iso = due_at_iso if due_at_iso else None
@@ -289,11 +297,11 @@ async def add_task(
     async with get_connection() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id
             """,
-            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name,
+            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type,
         )
         return int(row["id"])
 
@@ -382,6 +390,24 @@ async def get_task_reminder_settings(
     if not row:
         return None, None, None, None
     return row["remind_at"], row["remind_offset_min"], row["due_at"], row["text"]
+
+
+async def get_task_attachment(
+    user_id: int,
+    task_id: int,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Returns (attachment_file_id, attachment_type) for a task
+    or (None, None) if not found or no attachment.
+    """
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT attachment_file_id, attachment_type FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user_id,
+        )
+    if not row:
+        return None, None
+    return row["attachment_file_id"], row["attachment_type"]
 
 
 async def update_task_reminder_settings(
