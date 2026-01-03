@@ -101,6 +101,7 @@ def build_agent_system_prompt(now_str: str, user_timezone: str) -> str:
 
 ## Примеры:
 - "добавь задачу купить молоко завтра в 10" → add_task(text="Купить молоко", deadline="2025-01-02T10:00:00")
+- "созвон завтра в 15:00 https://meet.google.com/abc" → add_task(text="Созвон", deadline="2025-01-02T15:00:00", url="https://meet.google.com/abc") — ВАЖНО: ссылку передавай в параметр url, НЕ включай её в text!
 - "удали задачу про молоко" → get_tasks(), потом delete_task(найденный_id)
 - "встретить девушку надо в понедельник" → get_tasks(), найти ID задачи про девушку, update_deadline(id, action="reschedule", deadline=...)
 - "что у меня на сегодня?" → show_tasks(filter="today")
@@ -242,7 +243,7 @@ async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
         return "У пользователя нет активных задач."
     
     lines = []
-    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in tasks:
         parts = [f"ID {task_id}: {text}"]
         
         if due_at:
@@ -453,7 +454,7 @@ async def _execute_show_tasks(
     
     filtered_tasks = []
     
-    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in tasks:
         if filter_type == "all":
             filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
