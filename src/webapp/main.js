@@ -340,6 +340,12 @@ const App = {
       }
     }
 
+    function openLink(url) {
+      if (url) {
+        window.open(url, '_blank');
+      }
+    }
+
     // --- Bottom Sheet Logic ---
 
     function openSheet(task) {
@@ -590,7 +596,7 @@ const App = {
       openSheet, closeSheet, toggleTask,
       saveText, saveDeadline, deleteTask,
       initReschedule, setDeadline,
-      openSettings, openArchive, clearArchive, archiveTask,
+      openSettings, openArchive, clearArchive, archiveTask, openLink,
       calPrevMonth, calNextMonth, selectDate,
       saveTimezone,
       // Formatters
