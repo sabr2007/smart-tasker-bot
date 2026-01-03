@@ -309,15 +309,15 @@ async def add_task(
         return int(row["id"])
 
 
-async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, Optional[str]]]:
+async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, Optional[str], Optional[str]]]:
     """
-    Returns list of active tasks: (id, text, due_at, is_recurring, origin_user_name).
+    Returns list of active tasks: (id, text, due_at, is_recurring, origin_user_name, attachment_file_id).
     Sorted: tasks with deadlines first (ascending), then others.
     """
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, origin_user_name
+            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, origin_user_name, attachment_file_id
             FROM tasks
             WHERE user_id = $1
               AND (status IS NULL OR status = 'active')
@@ -328,7 +328,7 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, O
             """,
             user_id,
         )
-        return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"]) for row in rows]
+        return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"], row["attachment_file_id"]) for row in rows]
 
 
 async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool]]:
@@ -739,13 +739,13 @@ async def get_completed_tasks_since(
 
 
 async def clear_archived_tasks(user_id: int) -> None:
-    """Clears user's completed task archive and writes snapshots to tasks_history."""
+    """Clears user's archived tasks and writes snapshots to tasks_history."""
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
             SELECT id, user_id, text, created_at, due_at, status, completed_at, category
             FROM tasks
-            WHERE user_id = $1 AND status = 'done'
+            WHERE user_id = $1 AND status = 'archived'
             """,
             user_id,
         )
@@ -772,7 +772,7 @@ async def clear_archived_tasks(user_id: int) -> None:
                 )
 
         await conn.execute(
-            "DELETE FROM tasks WHERE user_id = $1 AND status = 'done'",
+            "DELETE FROM tasks WHERE user_id = $1 AND status = 'archived'",
             user_id,
         )
 

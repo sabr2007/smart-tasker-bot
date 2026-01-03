@@ -56,6 +56,8 @@
                 <div class="task-content">
                   <div class="task-text" :class="{ 'text-done': !!task.completed_at }">
                     {{ task.text }}
+                    <i v-if="task.has_attachment" data-lucide="paperclip"
+                      style="width: 14px; height: 14px; vertical-align: middle; margin-left: 4px; opacity: 0.6;"></i>
                     <i v-if="task.is_recurring" data-lucide="repeat"
                       style="width: 14px; height: 14px; vertical-align: middle; margin-left: 4px; opacity: 0.6;"></i>
                   </div>

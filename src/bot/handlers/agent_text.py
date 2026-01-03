@@ -236,12 +236,6 @@ async def handle_agent_voice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         logger.info("Agent: Transcribed voice from user %s: %r", user_id, text[:100])
         
-        # Echo transcribed text
-        await update.message.reply_text(
-            f"🎤 *Распознано:* {text}",
-            parse_mode="Markdown",
-        )
-        
         # Process with agent
         user_timezone = await db.get_user_timezone(user_id)
         history = await _get_user_history(user_id)
@@ -343,7 +337,15 @@ async def handle_agent_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if origin_name:
             caption = f"Это пересланное фото от {origin_name}. {caption}".strip()
         
-        extra_context = {"source": source, "origin_user_name": origin_name or None}
+        # Save photo file_id for later retrieval (e.g., user asks "send me the ticket")
+        # send_attachment_with_reminder=False for photos (schedules don't need auto-send)
+        extra_context = {
+            "source": source,
+            "origin_user_name": origin_name or None,
+            "attachment_file_id": photo.file_id,
+            "attachment_type": "photo",
+            "send_attachment_with_reminder": False,  # Don't auto-send schedules with reminders
+        }
         
         # Get user settings and history
         user_timezone = await db.get_user_timezone(user_id)
@@ -453,9 +455,9 @@ async def handle_agent_document(update: Update, context: ContextTypes.DEFAULT_TY
         caption = update.message.caption or ""
         
         # Build prompt for agent
-        prompt = f"Проанализируй этот документ и создай задачу с датой если есть:\n\n{pdf_text}"
+        prompt = f"Проанализируй этот документ, извлеки ключевую информацию (маршрут, дата, время, событие) и спроси меня, добавить ли это как задачу:\n\n{pdf_text}"
         if caption:
-            prompt = f"{caption}\n\nТекст документа:\n{pdf_text}"
+            prompt = f"{caption}\n\nТекст документа (извлеки детали и спроси про добавление задачи):\n{pdf_text}"
         
         # Detect forwarded documents
         origin_name = ""

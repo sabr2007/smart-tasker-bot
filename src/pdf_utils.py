@@ -13,7 +13,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Limits to prevent token overflow
-MAX_PAGES = 3
+MAX_PAGES = 1
 MAX_CHARS = 8000  # ~2000 tokens
 
 
