@@ -242,7 +242,7 @@ async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
         return "У пользователя нет активных задач."
     
     lines = []
-    for task_id, text, due_at, is_recurring, origin_user_name in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link in tasks:
         parts = [f"ID {task_id}: {text}"]
         
         if due_at:
@@ -453,7 +453,7 @@ async def _execute_show_tasks(
     
     filtered_tasks = []
     
-    for task_id, text, due_at, is_recurring, origin_user_name in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link in tasks:
         if filter_type == "all":
             filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
