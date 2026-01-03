@@ -170,6 +170,7 @@ async def execute_tool(
                 attachment_file_id=attachment_file_id,
                 attachment_type=attachment_type,
                 send_attachment_with_reminder=send_with_reminder,
+                link_url=arguments.get("url"),
             )
         
         elif tool_name == "complete_task":
@@ -268,6 +269,7 @@ async def _execute_add_task(
     attachment_file_id: Optional[str] = None,
     attachment_type: Optional[str] = None,
     send_attachment_with_reminder: bool = True,
+    link_url: Optional[str] = None,
 ) -> str:
     """Create a new task."""
     if not text or not text.strip():
@@ -289,6 +291,7 @@ async def _execute_add_task(
         attachment_file_id=attachment_file_id,
         attachment_type=attachment_type,
         send_attachment_with_reminder=send_attachment_with_reminder,
+        link_url=link_url,
     )
     
     # Schedule reminder if deadline is set

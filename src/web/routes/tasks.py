@@ -21,6 +21,7 @@ class TaskOut(BaseModel):
     recurrence_type: Optional[str] = None
     recurrence_interval: Optional[int] = None
     has_attachment: bool = False
+    link_url: Optional[str] = None
 
 
 class ArchivedTaskOut(BaseModel):
@@ -40,10 +41,10 @@ class TaskPatchIn(BaseModel):
     deadline_iso: Optional[str] = None
 
 
-def _task_tuple_to_out(row: tuple[int, str, Optional[str], bool, Optional[str], Optional[str]]) -> TaskOut:
-    tid, text, due, is_recurring, _origin_user_name, attachment_file_id = row
+def _task_tuple_to_out(row: tuple[int, str, Optional[str], bool, Optional[str], Optional[str], Optional[str]]) -> TaskOut:
+    tid, text, due, is_recurring, _origin_user_name, attachment_file_id, link_url = row
     # due_at is already stored in UTC format in the database
-    return TaskOut(id=int(tid), text=text, due_at=due, is_recurring=is_recurring, has_attachment=bool(attachment_file_id))
+    return TaskOut(id=int(tid), text=text, due_at=due, is_recurring=is_recurring, has_attachment=bool(attachment_file_id), link_url=link_url)
 
 
 def _archived_tuple_to_out(row: tuple[int, str, Optional[str], Optional[str]]) -> ArchivedTaskOut:
