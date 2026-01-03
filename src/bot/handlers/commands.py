@@ -51,10 +51,12 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sent = 0
+    import asyncio
     for uid in user_ids:
         try:
             await context.bot.send_message(chat_id=uid, text=text)
             sent += 1
+            await asyncio.sleep(0.05)  # 50ms delay to respect Telegram limits
         except Exception as e:
             logger.warning(f"Не удалось отправить broadcast пользователю {uid}: {e}")
 
