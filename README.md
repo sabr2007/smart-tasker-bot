@@ -28,6 +28,12 @@ Smart Tasker Bot is an AI-powered personal assistant integrated into Telegram. I
 *   **Daily Digest**
     A morning summary of your upcoming tasks delivered at a scheduled time.
 
+*   **Neural Inbox**
+    Send screenshots, photos of announcements, or PDF documents. The bot uses **GPT-4o Vision** to analyze visual content, extract dates and tasks, and automatically populate your schedule.
+
+*   **Smart Attachments**
+    Attach files (files, tickets, scans) to specific tasks. The bot can retrieve them on demand ("Send me the ticket for the flight") or automatically send them along with the reminder.
+
 ## Technical Architecture
 
 This project is built as a hybrid system, combining a traditional event-driven Telegram bot with an autonomous AI agent layer.
@@ -38,7 +44,7 @@ This project is built as a hybrid system, combining a traditional event-driven T
 *   **Framework**: `python-telegram-bot` (Asynchronous)
 *   **Web Backend**: FastAPI
 *   **Database**: PostgreSQL
-*   **AI Engine**: OpenAI API (GPT models for intent parsing and entity extraction)
+*   **AI Engine**: OpenAI API (GPT-4o for multimodal analysis, intent parsing, and entity extraction)
 
 ### How It Works
 
