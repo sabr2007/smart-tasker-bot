@@ -238,14 +238,19 @@ async def execute_tool(
 
 
 async def _execute_get_tasks(user_id: int, user_timezone: str) -> str:
-    """Get all active tasks for user."""
+    """Get all active tasks for user (excludes completed tasks)."""
     tasks = await db.get_tasks(user_id)
     
-    if not tasks:
+    # Filter out completed tasks - only show tasks where completed_at is None
+    active_tasks = [
+        t for t in tasks if t[7] is None  # t[7] is completed_at
+    ]
+    
+    if not active_tasks:
         return "У пользователя нет активных задач."
     
     lines = []
-    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in active_tasks:
         parts = [f"ID {task_id}: {text}"]
         
         if due_at:
@@ -444,10 +449,15 @@ async def _execute_show_tasks(
     date_str: Optional[str],
     user_timezone: str,
 ) -> str:
-    """Show tasks with filter."""
+    """Show tasks with filter (excludes completed tasks)."""
     tasks = await db.get_tasks(user_id)
     
-    if not tasks:
+    # Filter out completed tasks - only show tasks where completed_at is None
+    active_tasks = [
+        t for t in tasks if t[7] is None  # t[7] is completed_at
+    ]
+    
+    if not active_tasks:
         return "У пользователя нет активных задач."
     
     now = now_in_tz(user_timezone)
@@ -456,7 +466,7 @@ async def _execute_show_tasks(
     
     filtered_tasks = []
     
-    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in tasks:
+    for task_id, text, due_at, is_recurring, origin_user_name, _attachment, _link, _completed in active_tasks:
         if filter_type == "all":
             filtered_tasks.append((task_id, text, due_at, is_recurring, origin_user_name))
         
