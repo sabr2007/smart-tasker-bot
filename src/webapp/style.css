@@ -24,7 +24,7 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--tg-theme-bg-color);
   color: var(--tg-theme-text-color);
   -webkit-font-smoothing: antialiased;
@@ -78,6 +78,59 @@ body,
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.5px;
+}
+
+/* Tasks Header with Greeting */
+.header-tasks {
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.header-left {
+  flex: 1;
+}
+
+.greeting {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.tasks-summary {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+/* Progress Bar */
+.progress-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 12px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--tg-theme-button-color);
+  border-radius: 3px;
+  transition: width 0.4s ease-out;
+}
+
+.progress-percent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color);
+  min-width: 32px;
+  text-align: right;
 }
 
 .icon-btn {
@@ -561,4 +614,517 @@ body,
 
 .overlay-header .danger {
   color: var(--tg-theme-destructive-text-color);
+}
+
+/* === Settings Cards === */
+.settings-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
+  padding: 14px 12px;
+  cursor: pointer;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.settings-card:active {
+  transform: scale(0.98);
+  opacity: 0.8;
+}
+
+.settings-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--tg-theme-button-color);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.settings-card-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-card-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-card-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-card-sub {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+.settings-card-arrow {
+  color: var(--tg-theme-hint-color);
+  flex-shrink: 0;
+}
+
+.settings-card-arrow svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Settings Footer */
+.settings-footer {
+  margin-top: auto;
+  padding-top: 32px;
+  text-align: center;
+}
+
+.settings-version {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color);
+  font-weight: 500;
+}
+
+.settings-credits {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+/* === Timezone Selection Screen === */
+.tz-search {
+  margin-bottom: 16px;
+}
+
+.tz-section {
+  margin-bottom: 24px;
+}
+
+.tz-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+.tz-list {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tz-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid var(--tg-theme-bg-color);
+}
+
+.tz-item:last-child {
+  border-bottom: none;
+}
+
+.tz-item:active {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.tz-item.selected {
+  background: rgba(51, 144, 236, 0.1);
+}
+
+.tz-label {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.tz-check {
+  color: var(--tg-theme-button-color);
+  flex-shrink: 0;
+}
+
+.tz-check svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* === Help Cards (Instructions) === */
+.help-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.help-card {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.help-card-emoji {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.help-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.help-card-text {
+  font-size: 14px;
+  color: var(--tg-theme-hint-color);
+  line-height: 1.4;
+}
+
+/* === Archive Day Groups === */
+.archive-group {
+  margin-bottom: 20px;
+}
+
+.archive-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+.archive-task {
+  background: var(--tg-theme-secondary-bg-color);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  opacity: 0.8;
+}
+
+.archive-task-checkbox {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--tg-theme-button-color);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.archive-task-checkbox svg {
+  width: 14px;
+  height: 14px;
+}
+
+.archive-task-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.archive-task-text {
+  font-size: 15px;
+  text-decoration: line-through;
+  opacity: 0.7;
+  word-break: break-word;
+}
+
+.archive-task-time {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+/* ========================================
+   Phase 4: Micro-Animations & Polish
+   ======================================== */
+
+/* Checkbox pulse animation on complete */
+@keyframes checkPulse {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.15);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.task-checkbox.done {
+  animation: checkPulse 0.3s ease-out;
+}
+
+/* Task item completion fade effect */
+@keyframes taskComplete {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  100% {
+    opacity: 0.7;
+    transform: translateX(0);
+  }
+}
+
+.task-item.completing {
+  animation: taskComplete 0.3s ease-out forwards;
+}
+
+/* Progress bar celebration on 100% */
+@keyframes progressCelebrate {
+
+  0%,
+  100% {
+    box-shadow: none;
+  }
+
+  50% {
+    box-shadow: 0 0 12px rgba(51, 144, 236, 0.6);
+  }
+}
+
+.progress-fill.complete {
+  animation: progressCelebrate 0.6s ease-out;
+  background: linear-gradient(90deg, var(--tg-theme-button-color), #4CAF50);
+}
+
+/* Smooth overlay fade-in */
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.overlay {
+  animation: overlayFadeIn 0.2s ease-out;
+}
+
+/* Sheet slide-up with bounce */
+@keyframes sheetSlideUp {
+  0% {
+    transform: translateY(100%);
+  }
+
+  70% {
+    transform: translateY(-2%);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.sheet.open {
+  animation: sheetSlideUp 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Icon button tap feedback */
+.icon-btn {
+  transition: transform 0.1s ease, opacity 0.15s ease;
+}
+
+.icon-btn:active {
+  transform: scale(0.9);
+}
+
+/* Primary button press effect */
+.primary-btn {
+  transition: transform 0.1s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+}
+
+.primary-btn:active {
+  transform: scale(0.97);
+}
+
+.primary-btn:not(:disabled):hover {
+  box-shadow: 0 4px 12px rgba(51, 144, 236, 0.3);
+}
+
+/* Action button ripple effect */
+.action-btn {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.action-btn:active {
+  transform: scale(0.98);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Settings card hover/tap effect */
+.settings-card {
+  transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-card:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Help card entrance animation */
+@keyframes helpCardEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.help-card {
+  animation: helpCardEntrance 0.3s ease-out backwards;
+}
+
+.help-card:nth-child(1) {
+  animation-delay: 0.05s;
+}
+
+.help-card:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.help-card:nth-child(3) {
+  animation-delay: 0.15s;
+}
+
+.help-card:nth-child(4) {
+  animation-delay: 0.2s;
+}
+
+/* Timezone item selection feedback */
+.tz-item {
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.tz-item:active {
+  transform: scale(0.99);
+}
+
+/* Tab button animation */
+.tab-btn {
+  transition: color 0.2s ease, transform 0.1s ease;
+}
+
+.tab-btn:active {
+  transform: scale(0.95);
+}
+
+.tab-btn svg {
+  transition: transform 0.2s ease;
+}
+
+.tab-btn.active svg {
+  transform: scale(1.1);
+}
+
+/* Chip button feedback */
+.chip {
+  transition: transform 0.1s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.chip:active {
+  transform: scale(0.95);
+}
+
+/* Calendar day selection */
+.mc-day {
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.mc-day:active:not(.empty) {
+  transform: scale(0.9);
+}
+
+/* Smooth text strikethrough */
+.task-text {
+  transition: opacity 0.2s ease;
+}
+
+.text-done {
+  transition: opacity 0.3s ease, text-decoration 0.2s ease;
+}
+
+/* Archive task subtle hover */
+.archive-task {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.archive-task:active {
+  transform: scale(0.98);
+}
+
+/* Input focus glow */
+.input-field {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-field:focus {
+  box-shadow: 0 0 0 3px rgba(51, 144, 236, 0.15);
+}
+
+/* Greeting text animation */
+@keyframes greetingFade {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.greeting {
+  animation: greetingFade 0.4s ease-out;
+}
+
+/* Progress bar smooth value animation */
+.progress-percent {
+  transition: color 0.3s ease;
+}
+
+/* Reduced motion support for accessibility */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -5,8 +5,16 @@ const App = {
     // --- Config ---
     const tg = window.Telegram?.WebApp;
 
-    // Common timezones for dropdown
-    const COMMON_TIMEZONES = [
+    // Popular timezones (shown first)
+    const POPULAR_TIMEZONES = [
+      { value: 'Asia/Almaty', label: 'Алматы (UTC+5)' },
+      { value: 'Europe/Moscow', label: 'Москва (UTC+3)' },
+      { value: 'Asia/Tashkent', label: 'Ташкент (UTC+5)' },
+      { value: 'Asia/Bishkek', label: 'Бишкек (UTC+6)' },
+    ];
+
+    // All timezones
+    const ALL_TIMEZONES = [
       { value: 'Asia/Almaty', label: 'Алматы (UTC+5)' },
       { value: 'Asia/Tashkent', label: 'Ташкент (UTC+5)' },
       { value: 'Asia/Bishkek', label: 'Бишкек (UTC+6)' },
@@ -14,14 +22,29 @@ const App = {
       { value: 'Europe/London', label: 'Лондон (UTC+0)' },
       { value: 'Europe/Paris', label: 'Париж (UTC+1)' },
       { value: 'Europe/Berlin', label: 'Берлин (UTC+1)' },
-      { value: 'America/New_York', label: 'Нью-Йорк (UTC-5)' },
-      { value: 'America/Los_Angeles', label: 'Лос-Анджелес (UTC-8)' },
-      { value: 'Asia/Tokyo', label: 'Токио (UTC+9)' },
-      { value: 'Asia/Shanghai', label: 'Шанхай (UTC+8)' },
+      { value: 'Europe/Kiev', label: 'Киев (UTC+2)' },
+      { value: 'Europe/Istanbul', label: 'Стамбул (UTC+3)' },
+      { value: 'Asia/Tbilisi', label: 'Тбилиси (UTC+4)' },
+      { value: 'Asia/Baku', label: 'Баку (UTC+4)' },
       { value: 'Asia/Dubai', label: 'Дубай (UTC+4)' },
-      { value: 'Australia/Sydney', label: 'Сидней (UTC+11)' },
+      { value: 'Asia/Yekaterinburg', label: 'Екатеринбург (UTC+5)' },
+      { value: 'Asia/Dhaka', label: 'Дакка (UTC+6)' },
+      { value: 'Asia/Bangkok', label: 'Бангкок (UTC+7)' },
       { value: 'Asia/Ho_Chi_Minh', label: 'Хо Чи Мин (UTC+7)' },
+      { value: 'Asia/Shanghai', label: 'Шанхай (UTC+8)' },
+      { value: 'Asia/Singapore', label: 'Сингапур (UTC+8)' },
+      { value: 'Asia/Tokyo', label: 'Токио (UTC+9)' },
+      { value: 'Asia/Seoul', label: 'Сеул (UTC+9)' },
+      { value: 'Australia/Sydney', label: 'Сидней (UTC+11)' },
+      { value: 'Pacific/Auckland', label: 'Окленд (UTC+13)' },
+      { value: 'America/New_York', label: 'Нью-Йорк (UTC-5)' },
+      { value: 'America/Chicago', label: 'Чикаго (UTC-6)' },
+      { value: 'America/Denver', label: 'Денвер (UTC-7)' },
+      { value: 'America/Los_Angeles', label: 'Лос-Анджелес (UTC-8)' },
     ];
+
+    // For backward compatibility
+    const COMMON_TIMEZONES = ALL_TIMEZONES;
 
     // --- State ---
     const loading = ref(true);
@@ -39,6 +62,11 @@ const App = {
     const archiveOpen = ref(false);
     const archiveTasks = ref([]);
     const loadingArchive = ref(false);
+
+    // Settings sub-screens
+    const timezoneOpen = ref(false);
+    const helpOpen = ref(false);
+    const timezoneSearch = ref('');
 
     // Calendar State
     const now = new Date();
@@ -67,6 +95,13 @@ const App = {
         tg.BackButton.onClick(() => {
           if (sheet.open) {
             closeSheet();
+          } else if (helpOpen.value) {
+            helpOpen.value = false;
+          } else if (timezoneOpen.value) {
+            timezoneOpen.value = false;
+            timezoneSearch.value = '';
+          } else if (archiveOpen.value) {
+            archiveOpen.value = false;
           } else if (settingsOpen.value) {
             settingsOpen.value = false;
           }
@@ -84,9 +119,9 @@ const App = {
     });
 
     // Update BackButton visibility based on state
-    watch([() => sheet.open, settingsOpen], ([sOpen, setOpen]) => {
+    watch([() => sheet.open, settingsOpen, timezoneOpen, helpOpen, archiveOpen], ([sOpen, setOpen, tzOpen, hlpOpen, arcOpen]) => {
       if (!tg) return;
-      if (sOpen || setOpen) {
+      if (sOpen || setOpen || tzOpen || hlpOpen || arcOpen) {
         tg.BackButton.show();
       } else {
         tg.BackButton.hide();
@@ -94,7 +129,7 @@ const App = {
     });
 
     // Re-render icons when tab, sheet, or settings changes
-    watch([activeTab, () => sheet.mode, () => sheet.open, settingsOpen, showInstructions, archiveOpen], () => {
+    watch([activeTab, () => sheet.mode, () => sheet.open, settingsOpen, showInstructions, archiveOpen, timezoneOpen, helpOpen], () => {
       nextTick(() => lucide.createIcons());
     });
 
@@ -106,7 +141,110 @@ const App = {
 
     // --- Computed ---
     const headerTitle = computed(() => {
-      return activeTab.value === 'tasks' ? 'My Tasks' : 'Календарь';
+      return 'Календарь'; // Only shown on calendar tab now
+    });
+
+    // Time-based greeting
+    const greeting = computed(() => {
+      const tz = userTimezone.value || 'Asia/Almaty';
+      let hour;
+      try {
+        hour = parseInt(new Intl.DateTimeFormat('en-US', {
+          timeZone: tz,
+          hour: 'numeric',
+          hour12: false
+        }).format(new Date()));
+      } catch (e) {
+        hour = new Date().getHours();
+      }
+
+      if (hour >= 5 && hour < 12) return 'Доброе утро! ☀️';
+      if (hour >= 12 && hour < 18) return 'Добрый день! 👋';
+      if (hour >= 18 && hour < 23) return 'Добрый вечер! 🌙';
+      return 'Не спится? 🦉';
+    });
+
+    // Progress bar for today's tasks
+    const todayStats = computed(() => {
+      const tz = userTimezone.value || 'Asia/Almaty';
+      const todayKey = getDateKeyInTz(new Date(), tz);
+      const nowMs = Date.now();
+
+      let total = 0;
+      let completed = 0;
+
+      tasks.value.forEach(t => {
+        // Count tasks that are for today (due today or completed today)
+        const dueMs = t.due_at ? Date.parse(t.due_at) : null;
+        const isOverdue = dueMs && dueMs < nowMs;
+        const isDueToday = dueMs && getDateKeyInTz(new Date(dueMs), tz) === todayKey;
+        const completedToday = t.completed_at && getDateKeyInTz(new Date(t.completed_at), tz) === todayKey;
+
+        if (isDueToday || isOverdue || completedToday) {
+          total++;
+          if (t.completed_at) completed++;
+        }
+      });
+
+      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+      return { total, completed, percent };
+    });
+
+    // Filtered timezones based on search
+    const filteredTimezones = computed(() => {
+      const query = timezoneSearch.value.toLowerCase().trim();
+      if (!query) return ALL_TIMEZONES;
+      return ALL_TIMEZONES.filter(tz =>
+        tz.label.toLowerCase().includes(query) ||
+        tz.value.toLowerCase().includes(query)
+      );
+    });
+
+    // Current timezone label for display
+    const currentTimezoneLabel = computed(() => {
+      const tz = ALL_TIMEZONES.find(t => t.value === userTimezone.value);
+      return tz ? tz.label : userTimezone.value;
+    });
+
+    // Archive count for settings display
+    const archiveCount = computed(() => archiveTasks.value.length);
+
+    // Archive tasks grouped by day (Сегодня / Вчера / Ранее)
+    const archiveGroups = computed(() => {
+      const tz = userTimezone.value || 'Asia/Almaty';
+      const now = new Date();
+      const todayKey = getDateKeyInTz(now, tz);
+
+      // Calculate yesterday
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = getDateKeyInTz(yesterday, tz);
+
+      const today = [];
+      const yesterdayTasks = [];
+      const earlier = [];
+
+      archiveTasks.value.forEach(task => {
+        if (!task.completed_at) return;
+
+        const completedDate = new Date(task.completed_at);
+        const completedKey = getDateKeyInTz(completedDate, tz);
+
+        if (completedKey === todayKey) {
+          today.push(task);
+        } else if (completedKey === yesterdayKey) {
+          yesterdayTasks.push(task);
+        } else {
+          earlier.push(task);
+        }
+      });
+
+      const groups = [];
+      if (today.length) groups.push({ title: 'Сегодня', items: today });
+      if (yesterdayTasks.length) groups.push({ title: 'Вчера', items: yesterdayTasks });
+      if (earlier.length) groups.push({ title: 'Ранее', items: earlier });
+
+      return groups;
     });
 
     // Group tasks for List View
@@ -289,14 +427,32 @@ const App = {
           body: JSON.stringify({ timezone: selectedTimezone.value })
         });
         userTimezone.value = selectedTimezone.value;
-        if (tg?.showAlert) {
-          tg.showAlert('Часовой пояс сохранён!');
-        }
+        // Close timezone screen after save
+        timezoneOpen.value = false;
+        timezoneSearch.value = '';
       } catch (e) {
         console.error('Failed to save timezone:', e);
       } finally {
         savingTimezone.value = false;
       }
+    }
+
+    // Select timezone and auto-save
+    async function selectTimezone(tz) {
+      if (savingTimezone.value || tz === userTimezone.value) return;
+      selectedTimezone.value = tz;
+      await saveTimezone();
+    }
+
+    // Open timezone screen
+    function openTimezone() {
+      timezoneOpen.value = true;
+      timezoneSearch.value = '';
+    }
+
+    // Open help screen
+    function openHelp() {
+      helpOpen.value = true;
     }
 
     async function toggleTask(task) {
@@ -343,6 +499,12 @@ const App = {
     function openLink(url) {
       if (url) {
         window.open(url, '_blank');
+      }
+    }
+
+    function openPhone(phone) {
+      if (phone) {
+        window.open(`tel:${phone}`, '_self');
       }
     }
 
@@ -555,6 +717,37 @@ const App = {
       return new Date(task.due_at) < new Date();
     }
 
+    // Format completed time for archive (shows time for today/yesterday, date otherwise)
+    function formatCompletedTime(iso, groupTitle) {
+      if (!iso) return '';
+      const date = new Date(iso);
+      if (isNaN(date)) return '';
+
+      const tz = userTimezone.value || 'Asia/Almaty';
+      try {
+        if (groupTitle === 'Сегодня' || groupTitle === 'Вчера') {
+          // Show only time for today/yesterday
+          return new Intl.DateTimeFormat('ru-RU', {
+            timeZone: tz,
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).format(date);
+        } else {
+          // Show date for earlier items
+          return new Intl.DateTimeFormat('ru-RU', {
+            timeZone: tz,
+            day: 'numeric',
+            month: 'short'
+          }).format(date);
+        }
+      } catch (e) {
+        const h = String(date.getHours()).padStart(2, '0');
+        const m = String(date.getMinutes()).padStart(2, '0');
+        return `${h}:${m}`;
+      }
+    }
+
     // Settings
     function openSettings() {
       settingsOpen.value = true;
@@ -587,20 +780,25 @@ const App = {
       loading, tasks, activeTab, settingsOpen,
       sheet, editForm, showInstructions,
       archiveOpen, archiveTasks, loadingArchive,
+      // Settings sub-screens
+      timezoneOpen, helpOpen, timezoneSearch,
       // Timezone
-      userTimezone, selectedTimezone, savingTimezone, COMMON_TIMEZONES,
+      userTimezone, selectedTimezone, savingTimezone,
+      COMMON_TIMEZONES, POPULAR_TIMEZONES, ALL_TIMEZONES,
+      filteredTimezones, currentTimezoneLabel, archiveCount, archiveGroups,
       // Computed
-      headerTitle, taskGroups,
+      headerTitle, taskGroups, greeting, todayStats,
       calendarTitle, calendarDays, calendarTasks, selectedDate,
       // Methods
       openSheet, closeSheet, toggleTask,
       saveText, saveDeadline, deleteTask,
       initReschedule, setDeadline,
-      openSettings, openArchive, clearArchive, archiveTask, openLink,
+      openSettings, openArchive, clearArchive, archiveTask, openLink, openPhone,
+      openTimezone, openHelp, selectTimezone,
       calPrevMonth, calNextMonth, selectDate,
       saveTimezone,
       // Formatters
-      formatDue, formatDate, formatTime, isOverdue
+      formatDue, formatDate, formatTime, isOverdue, formatCompletedTime
     };
   }
 };
