@@ -747,10 +747,19 @@ async def run_agent_turn(
         # Encode image to Base64 for GPT-4o Vision
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         
-        # Determine MIME type dynamically
-        import imghdr
-        img_type = imghdr.what(None, h=image_bytes)
-        mime_type = f"image/{img_type}" if img_type else "image/jpeg"
+        # Determine MIME type by magic bytes (imghdr is deprecated in 3.11+)
+        def _detect_image_mime(data: bytes) -> str:
+            if data[:8] == b'\x89PNG\r\n\x1a\n':
+                return 'image/png'
+            if data[:2] == b'\xff\xd8':
+                return 'image/jpeg'
+            if data[:6] in (b'GIF87a', b'GIF89a'):
+                return 'image/gif'
+            if data[:4] == b'RIFF' and len(data) > 12 and data[8:12] == b'WEBP':
+                return 'image/webp'
+            return 'image/jpeg'  # fallback
+        
+        mime_type = _detect_image_mime(image_bytes)
         
         user_content: Union[str, list] = [
             {

@@ -341,16 +341,21 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, O
         return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"], row["attachment_file_id"], row["link_url"], row["completed_at"], row["phone"]) for row in rows]
 
 
-async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool]]:
-    """Returns one task (id, text, due_at, is_recurring) or None."""
+async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]]:
+    """Returns one task (id, text, due_at, is_recurring, origin_user_name, attachment_file_id, link_url, completed_at, phone) or None."""
     async with get_connection() as conn:
         row = await conn.fetchrow(
-            "SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring FROM tasks WHERE id = $1 AND user_id = $2",
+            """
+            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, 
+                   origin_user_name, attachment_file_id, link_url, completed_at, phone
+            FROM tasks 
+            WHERE id = $1 AND user_id = $2
+            """,
             task_id, user_id,
         )
     if not row:
         return None
-    return (row["id"], row["text"], row["due_at"], row["is_recurring"])
+    return (row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"], row["attachment_file_id"], row["link_url"], row["completed_at"], row["phone"])
 
 
 async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) -> Optional[dict]:
@@ -359,7 +364,7 @@ async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) 
         """
         SELECT id, user_id, text, created_at, due_at, remind_at, remind_offset_min, 
                status, completed_at, category, is_recurring, recurrence_type, 
-               recurrence_interval, recurrence_end_date
+               recurrence_interval, recurrence_end_date, link_url, phone
         FROM tasks
         WHERE id = $1 AND user_id = $2
         """,
@@ -384,6 +389,8 @@ async def _fetch_task_row(conn: asyncpg.Connection, user_id: int, task_id: int) 
         "recurrence_type": row["recurrence_type"],
         "recurrence_interval": row["recurrence_interval"],
         "recurrence_end_date": row["recurrence_end_date"],
+        "link_url": row["link_url"],
+        "phone": row["phone"],
     }
 
 
