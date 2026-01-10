@@ -185,6 +185,10 @@ async def init_db():
         if "link_url" not in existing_cols:
             await conn.execute("ALTER TABLE tasks ADD COLUMN link_url TEXT")
 
+        # Phone number for tasks with phone contacts
+        if "phone" not in existing_cols:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN phone TEXT")
+
         # --- Indexes for performance ---
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tasks_user_status 
@@ -298,6 +302,7 @@ async def add_task(
     attachment_type: Optional[str] = None,
     send_attachment_with_reminder: bool = True,
     link_url: Optional[str] = None,
+    phone: Optional[str] = None,
 ) -> int:
     """Adds a task and returns its ID."""
     remind_at_iso = due_at_iso if due_at_iso else None
@@ -305,24 +310,24 @@ async def add_task(
     async with get_connection() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder, link_url)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            INSERT INTO tasks (user_id, text, due_at, remind_at, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder, link_url, phone)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             """,
-            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder, link_url,
+            user_id, text, due_at_iso, remind_at_iso, remind_offset_min, category, source, origin_user_name, attachment_file_id, attachment_type, send_attachment_with_reminder, link_url, phone,
         )
         return int(row["id"])
 
 
-async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, Optional[str], Optional[str], Optional[str], Optional[str]]]:
+async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]]:
     """
-    Returns list of active and done tasks: (id, text, due_at, is_recurring, origin_user_name, attachment_file_id, link_url, completed_at).
+    Returns list of active and done tasks: (id, text, due_at, is_recurring, origin_user_name, attachment_file_id, link_url, completed_at, phone).
     Sorted: tasks with deadlines first (ascending), then others.
     """
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, origin_user_name, attachment_file_id, link_url, completed_at
+            SELECT id, text, due_at, COALESCE(is_recurring, FALSE) as is_recurring, origin_user_name, attachment_file_id, link_url, completed_at, phone
             FROM tasks
             WHERE user_id = $1
               AND (status IS NULL OR status IN ('active', 'done'))
@@ -333,7 +338,7 @@ async def get_tasks(user_id: int) -> list[tuple[int, str, Optional[str], bool, O
             """,
             user_id,
         )
-        return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"], row["attachment_file_id"], row["link_url"], row["completed_at"]) for row in rows]
+        return [(row["id"], row["text"], row["due_at"], row["is_recurring"], row["origin_user_name"], row["attachment_file_id"], row["link_url"], row["completed_at"], row["phone"]) for row in rows]
 
 
 async def get_task(user_id: int, task_id: int) -> Optional[tuple[int, str, Optional[str], bool]]:

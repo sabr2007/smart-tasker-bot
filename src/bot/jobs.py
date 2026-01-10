@@ -41,36 +41,51 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     attachment_file_id = None
     attachment_type = None
     send_with_reminder = False
-    
+    link_url = None
+    phone = None
+
     if tid > 0:
         async with db.get_connection() as conn:
             task_row = await db._fetch_task_row(conn, chat_id, tid)
-        
+
         if not task_row or task_row.get("status") != "active":
             logger.info(f"Skipping reminder for task {tid}: task is not active or deleted.")
             return
-        
+
         # Check if task was rescheduled via WebApp (remind_at changed)
         scheduled_remind_at = data.get("scheduled_remind_at")
         current_remind_at = task_row.get("remind_at")
         if scheduled_remind_at and current_remind_at and scheduled_remind_at != current_remind_at:
             logger.info(f"Skipping reminder for task {tid}: remind_at changed from {scheduled_remind_at} to {current_remind_at}")
             return
-        
+
+        # Get task details
+        link_url = task_row.get("link_url")
+        phone = task_row.get("phone")
+
         # Get attachment info (including send_with_reminder flag)
         attachment_file_id, attachment_type, send_with_reminder = await db.get_task_attachment(chat_id, tid)
 
+    # Build compact reminder message
+    message_parts = [f"⏰ {text}"]
+
+    # Add link if exists
+    if link_url:
+        message_parts.append(f"\n🔗 {link_url}")
+
+    # Add phone if exists
+    if phone:
+        message_parts.append(f"\n📞 {phone}")
+
+    reminder_text = "".join(message_parts)
+
     await context.bot.send_message(
         chat_id=chat_id,
-        text=(
-            "⏰ Напоминание:\n\n"
-            f"{text}\n\n"
-            "Если хочешь задачу отложить — нажми на кнопку или отправь точное время текстом "
-            "(например, «через 30 минут» или «в 18:10»)."
-        ),
+        text=reminder_text,
         reply_markup=snooze_keyboard(tid) if tid > 0 else None,
+        disable_web_page_preview=True,
     )
-    
+
     # Send attachment if exists AND flag is set
     if attachment_file_id and send_with_reminder:
         try:
@@ -78,13 +93,13 @@ async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await context.bot.send_document(
                     chat_id=chat_id,
                     document=attachment_file_id,
-                    caption="📎 Прикреплённый файл к задаче"
+                    caption="📎 Файл к задаче"
                 )
             elif attachment_type == "photo":
                 await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=attachment_file_id,
-                    caption="📎 Прикреплённое фото к задаче"
+                    caption="📎 Фото к задаче"
                 )
         except Exception as e:
             logger.warning(f"Failed to send attachment for task {tid}: {e}")

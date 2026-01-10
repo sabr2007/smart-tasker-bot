@@ -19,18 +19,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Приветствие и инициализация нового пользователя."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or "друг"
-    
+
     # Clear conversation history for fresh start
     from bot.handlers.agent_text import clear_user_history
     await clear_user_history(user_id)
-    
+
     # Ensure user exists in DB with default timezone
     await db.get_user_settings(user_id)
-    
+
     await update.message.reply_text(
         f"Привет, {user_name}! 👋\n\n"
-        "Я — Smart Tasker, твой AI-помощник для управления задачами.\n\n"
-        "Просто напиши мне, что нужно сделать,",
+        "Я Smart Tasker — пиши задачи как думаешь, "
+        "отправляй голосовые или скидывай скриншоты.\n\n"
+        "Всё остальное сделаю сам ✓",
         reply_markup=MAIN_KEYBOARD,
     )
 

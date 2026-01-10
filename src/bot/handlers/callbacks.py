@@ -34,7 +34,7 @@ async def on_mark_done_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard: list[list[InlineKeyboardButton]] = []
-    for task_id, text, _, _, _, _, _, _ in tasks:
+    for task_id, text, _, _, _, _, _, _, _ in tasks:
         label = text if len(text) <= 30 else text[:27] + "..."
         keyboard.append(
             [
@@ -72,7 +72,7 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     # найдём текст задачи, чтобы красиво показать
     tasks = await db.get_tasks(user_id)
     task_text = None
-    for tid, txt, _, _, _, _, _, _ in tasks:
+    for tid, txt, _, _, _, _, _, _, _ in tasks:
         if tid == task_id:
             task_text = txt
             break
@@ -123,16 +123,15 @@ async def on_snooze_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Быстрое отложение из inline-кнопок напоминания.
-    callback_data: snooze:{task_id}:{5|30|60}
+    callback_data: snooze:{task_id}:{15|60|tomorrow}
     """
     query = update.callback_query
     await query.answer()
 
     data = query.data or ""
     try:
-        _, task_id_str, minutes_str = data.split(":", maxsplit=2)
+        _, task_id_str, snooze_value = data.split(":", maxsplit=2)
         task_id = int(task_id_str)
-        minutes = int(minutes_str)
     except Exception:
         return
 
@@ -142,27 +141,40 @@ async def on_snooze_quick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get user timezone for proper conversion
     user_timezone = await db.get_user_timezone(user_id)
     now = now_in_tz(user_timezone)
-    dt = now + timedelta(minutes=max(minutes, 0))
-    # Import MAIN_KEYBOARD locally if needed or from bot.keyboards
+
+    # Calculate new deadline based on snooze value
+    if snooze_value == "tomorrow":
+        # Tomorrow at 9:00 AM
+        tomorrow = now + timedelta(days=1)
+        dt = tomorrow.replace(hour=9, minute=0, second=0, microsecond=0)
+        response_text = "Отложил на завтра 9:00 ✓"
+    else:
+        minutes = int(snooze_value)
+        dt = now + timedelta(minutes=max(minutes, 0))
+        if minutes >= 60:
+            response_text = f"Отложил на {minutes // 60} ч ✓"
+        else:
+            response_text = f"Отложил на {minutes} мин ✓"
+
     from bot.keyboards import MAIN_KEYBOARD
-    
+
     remind_iso = normalize_deadline_to_utc(dt.isoformat(), user_timezone)
 
     _remind_at, offset_min, due_at, task_text = await db.get_task_reminder_settings(user_id, task_id)
     cancel_task_reminder(task_id, context)
-    
+
     # Обновляем и remind_at, и due_at чтобы LLM показывал актуальный дедлайн
     await db.update_task_due(user_id, task_id, remind_iso)
     await db.update_task_reminder_settings(user_id, task_id, remind_at_iso=remind_iso, remind_offset_min=offset_min)
-    
+
     schedule_task_reminder(
         context.job_queue,
         task_id=task_id,
         task_text=task_text or "задача",
-        deadline_iso=remind_iso,  # Используем новый дедлайн
+        deadline_iso=remind_iso,
         chat_id=chat_id,
         remind_at_iso=remind_iso,
     )
 
     if query.message:
-        await query.message.reply_text(f"Ок, отложил на {minutes} мин.", reply_markup=MAIN_KEYBOARD)
+        await query.message.reply_text(response_text, reply_markup=MAIN_KEYBOARD)

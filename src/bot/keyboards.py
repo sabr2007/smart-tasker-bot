@@ -17,8 +17,7 @@ from config import WEBAPP_URL
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [
-            KeyboardButton("Покажи задачи"),
-            KeyboardButton("Открыть панель задач", web_app=WebAppInfo(url=WEBAPP_URL)),
+            KeyboardButton("📋 Панель задач", web_app=WebAppInfo(url=WEBAPP_URL)),
         ],
     ],
     resize_keyboard=True,
@@ -28,28 +27,22 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 # ==== INLINE КЛАВИАТУРЫ ДЛЯ SNOOZE =====
 
 def snooze_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура напоминания: Выполнено / Отложить."""
+    """Клавиатура напоминания: один ряд с быстрыми действиями."""
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Выполнено ✅", callback_data=f"done_task:{task_id}"),
-                InlineKeyboardButton("Отложить ⏳", callback_data=f"snooze_prompt:{task_id}"),
+                InlineKeyboardButton("Готово ✓", callback_data=f"done_task:{task_id}"),
+                InlineKeyboardButton("+15м", callback_data=f"snooze:{task_id}:15"),
+                InlineKeyboardButton("+1ч", callback_data=f"snooze:{task_id}:60"),
+                InlineKeyboardButton("Завтра", callback_data=f"snooze:{task_id}:tomorrow"),
             ],
         ]
     )
 
 
 def snooze_choice_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Инлайн-выбор длительности отложенного напоминания."""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("+5 мин", callback_data=f"snooze:{task_id}:5"),
-                InlineKeyboardButton("+30 мин", callback_data=f"snooze:{task_id}:30"),
-                InlineKeyboardButton("+1 час", callback_data=f"snooze:{task_id}:60"),
-            ]
-        ]
-    )
+    """Резервная клавиатура (для совместимости)."""
+    return snooze_keyboard(task_id)
 
 
 # ==== INLINE КЛАВИАТУРЫ ДЛЯ СПИСКА ЗАДАЧ =====
