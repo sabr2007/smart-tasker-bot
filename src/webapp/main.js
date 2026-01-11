@@ -1,7 +1,15 @@
+// Debug helper
+const log = (msg) => { if (window.debugLog) window.debugLog(msg); else console.log(msg); };
+
+log('main.js loaded');
+
 const { createApp, ref, computed, reactive, onMounted, watch, nextTick, onUpdated } = Vue;
+
+log('Vue destructured');
 
 const App = {
   setup() {
+    log('setup() called');
     // --- Config ---
     const tg = window.Telegram?.WebApp;
 
@@ -88,14 +96,17 @@ const App = {
 
     // --- Telegram Integration ---
     onMounted(async () => {
-      // Hide fallback loader once Vue is mounted
-      const fallbackLoader = document.getElementById('fallback-loader');
-      if (fallbackLoader) fallbackLoader.style.display = 'none';
+      log('onMounted called');
 
       try {
+        log('tg exists: ' + !!tg);
+
         if (tg) {
           tg.ready();
+          log('tg.ready() called');
           tg.expand?.();
+          log('tg.expand() called');
+
           // Setup Back Button (with safety check for mobile WebView)
           if (tg.BackButton && typeof tg.BackButton.onClick === 'function') {
             tg.BackButton.onClick(() => {
@@ -112,18 +123,33 @@ const App = {
                 settingsOpen.value = false;
               }
             });
+            log('BackButton setup done');
           }
         }
 
         // Load user settings first (for timezone)
+        log('Loading user settings...');
         await loadUserSettings();
+        log('User settings loaded');
 
         // Then load tasks
+        log('Loading tasks...');
         await loadTasks();
+        log('Tasks loaded, loading=' + loading.value);
 
         // Init Lucide icons
-        nextTick(() => lucide.createIcons());
+        nextTick(() => {
+          lucide.createIcons();
+          log('Icons created');
+        });
+
+        // Hide fallback loader AFTER everything is done
+        const fallbackLoader = document.getElementById('fallback-loader');
+        if (fallbackLoader) fallbackLoader.style.display = 'none';
+        log('Fallback loader hidden');
+
       } catch (e) {
+        log('ERROR in onMounted: ' + e.message);
         console.error('App initialization error:', e);
         // Ensure loading is set to false even on error
         loading.value = false;
@@ -819,7 +845,15 @@ const App = {
   }
 };
 
-createApp(App).mount('#app');
+log('Creating Vue app...');
+try {
+  const app = createApp(App);
+  log('Vue app created, mounting...');
+  app.mount('#app');
+  log('Vue app mounted successfully');
+} catch (e) {
+  log('ERROR mounting Vue: ' + e.message);
+}
 
 
 
