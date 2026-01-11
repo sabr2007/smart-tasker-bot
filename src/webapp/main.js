@@ -1,19 +1,3 @@
-// Debug helper (ES5 compatible)
-function log(msg) {
-  if (window.debugLog) window.debugLog(msg);
-  else console.log(msg);
-}
-
-log('main.js loaded');
-
-// Check if Vue loaded
-if (typeof Vue === 'undefined') {
-  log('ERROR: Vue is undefined!');
-  throw new Error('Vue not loaded');
-}
-
-log('Vue exists: ' + typeof Vue);
-
 // ES5 compatible - no destructuring
 var createApp = Vue.createApp;
 var ref = Vue.ref;
@@ -24,11 +8,11 @@ var watch = Vue.watch;
 var nextTick = Vue.nextTick;
 var onUpdated = Vue.onUpdated;
 
-log('Vue methods extracted');
+// Minimal log function (can be removed in production)
+function log(msg) { console.log(msg); }
 
 const App = {
   setup() {
-    log('setup() called');
     // --- Config ---
     const tg = window.Telegram && window.Telegram.WebApp;
 
@@ -114,21 +98,15 @@ const App = {
     });
 
     // --- Telegram Integration ---
-    onMounted(async () => {
-      log('onMounted called');
-
+    onMounted(async function() {
       try {
-        log('tg exists: ' + !!tg);
-
         if (tg) {
           tg.ready();
-          log('tg.ready() called');
           if (tg.expand) tg.expand();
-          log('tg.expand() called');
 
-          // Setup Back Button (with safety check for mobile WebView)
+          // Setup Back Button
           if (tg.BackButton && typeof tg.BackButton.onClick === 'function') {
-            tg.BackButton.onClick(() => {
+            tg.BackButton.onClick(function() {
               if (sheet.open) {
                 closeSheet();
               } else if (helpOpen.value) {
@@ -142,36 +120,27 @@ const App = {
                 settingsOpen.value = false;
               }
             });
-            log('BackButton setup done');
           }
         }
 
         // Load user settings first (for timezone)
-        log('Loading user settings...');
         await loadUserSettings();
-        log('User settings loaded');
 
         // Then load tasks
-        log('Loading tasks...');
         await loadTasks();
-        log('Tasks loaded, loading=' + loading.value);
 
-        // Init Lucide icons
-        nextTick(() => {
-          lucide.createIcons();
-          log('Icons created');
-        });
-
-        // Hide fallback loader AFTER everything is done
-        const fallbackLoader = document.getElementById('fallback-loader');
+        // Hide fallback loader
+        var fallbackLoader = document.getElementById('fallback-loader');
         if (fallbackLoader) fallbackLoader.style.display = 'none';
-        log('Fallback loader hidden');
+
+        // Init icons after everything loaded
+        nextTick(function() { lucide.createIcons(); });
 
       } catch (e) {
-        log('ERROR in onMounted: ' + e.message);
         console.error('App initialization error:', e);
-        // Ensure loading is set to false even on error
         loading.value = false;
+        var fallbackLoader = document.getElementById('fallback-loader');
+        if (fallbackLoader) fallbackLoader.style.display = 'none';
       }
     });
 
@@ -189,13 +158,20 @@ const App = {
       }
     });
 
-    // Re-render icons when tab, sheet, or settings changes
-    watch([activeTab, () => sheet.mode, () => sheet.open, settingsOpen, showInstructions, archiveOpen, timezoneOpen, helpOpen], () => {
-      nextTick(() => lucide.createIcons());
+    // Re-render icons when loading completes or state changes
+    watch(loading, function(newVal) {
+      if (!newVal) {
+        nextTick(function() { lucide.createIcons(); });
+      }
     });
 
-    // Ensure icons render after any DOM update (e.g. moving task to completed)
-    onUpdated(() => {
+    // Re-render icons when tab, sheet, or settings changes
+    watch([activeTab, function() { return sheet.mode; }, function() { return sheet.open; }, settingsOpen, showInstructions, archiveOpen, timezoneOpen, helpOpen], function() {
+      nextTick(function() { lucide.createIcons(); });
+    });
+
+    // Ensure icons render after any DOM update
+    onUpdated(function() {
       lucide.createIcons();
     });
 
@@ -872,15 +848,7 @@ const App = {
   }
 };
 
-log('Creating Vue app...');
-try {
-  const app = createApp(App);
-  log('Vue app created, mounting...');
-  app.mount('#app');
-  log('Vue app mounted successfully');
-} catch (e) {
-  log('ERROR mounting Vue: ' + e.message);
-}
+createApp(App).mount('#app');
 
 
 

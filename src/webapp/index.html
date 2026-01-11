@@ -10,10 +10,6 @@
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <!-- Eruda Console for iOS debugging -->
-  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-  <script>eruda.init();</script>
-
   <!-- Vue 3 (Local Build) -->
   <script src="/vendor/vue.global.prod.js?v=5" onerror="document.getElementById('fallback-loader').innerHTML='<div style=\'text-align:center;padding:20px;color:#666\'>Ошибка загрузки. Перезагрузите страницу.</div>'"></script>
 
@@ -71,25 +67,11 @@
 </head>
 
 <body>
-  <!-- Fallback loader with debug info -->
-  <div id="fallback-loader" style="display: flex; flex-direction: column; height: 100vh; align-items: center; justify-content: center; background: var(--tg-theme-bg-color, #fff); padding: 20px;">
-    <div id="loader-spinner" style="width: 24px; height: 24px; border: 3px solid #ccc; border-top-color: #3390ec; border-radius: 50%; animation: spin .8s linear infinite;"></div>
-    <div id="debug-log" style="margin-top: 20px; font-size: 12px; color: #666; text-align: center; max-width: 300px;"></div>
+  <!-- Loader -->
+  <div id="fallback-loader" style="display: flex; height: 100vh; align-items: center; justify-content: center; background: var(--tg-theme-bg-color, #fff);">
+    <div style="width: 24px; height: 24px; border: 3px solid #ccc; border-top-color: #3390ec; border-radius: 50%; animation: spin .8s linear infinite;"></div>
   </div>
   <style>#fallback-loader { position: fixed; inset: 0; z-index: 9999; } @keyframes spin { to { transform: rotate(360deg); } }</style>
-  <script>
-    // Debug logger for iOS troubleshooting
-    window.debugLog = function(msg) {
-      var el = document.getElementById('debug-log');
-      if (el) el.innerHTML += msg + '<br>';
-      console.log('[DEBUG]', msg);
-    };
-    window.onerror = function(msg, url, line) {
-      debugLog('ERROR: ' + msg + ' (line ' + line + ')');
-      return false;
-    };
-    debugLog('Page loaded');
-  </script>
 
   <div id="app" v-cloak>
     <!-- Screen: Main App -->
@@ -100,12 +82,12 @@
         <div class="header-left">
           <div class="greeting">{{ greeting }}</div>
           <div class="tasks-summary" v-if="todayStats.total > 0">
-            {{ todayStats.percent === 100 ? 'Всё сделано! 🎉' : `Сегодня ${todayStats.completed} из ${todayStats.total}
-            задач` }}
+            <span v-if="todayStats.percent === 100">Всё сделано! 🎉</span>
+            <span v-else>Сегодня {{ todayStats.completed }} из {{ todayStats.total }} задач</span>
           </div>
         </div>
         <button class="icon-btn" @click="openSettings">
-          <i data-lucide="settings"></i>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
       </header>
 
@@ -115,15 +97,14 @@
           <div class="progress-fill" :class="{ complete: todayStats.percent === 100 }"
             :style="{ width: todayStats.percent + '%' }"></div>
         </div>
-        <div class="progress-percent" :style="{ color: todayStats.percent === 100 ? '#4CAF50' : '' }">{{
-          todayStats.percent }}%</div>
+        <div class="progress-percent">{{ todayStats.percent }}%</div>
       </div>
 
       <!-- Header: Calendar Tab -->
       <header class="header" v-else>
         <div class="header-title">{{ headerTitle }}</div>
         <button class="icon-btn" @click="openSettings">
-          <i data-lucide="settings"></i>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
       </header>
 
@@ -471,9 +452,7 @@
 
   </div>
 
-  <script>debugLog('Before main.js');</script>
-  <script src="/main.js?v=5" onerror="debugLog('ERROR: main.js failed to load')"></script>
-  <script>debugLog('After main.js tag');</script>
+  <script src="/main.js?v=6"></script>
 </body>
 
 </html>
