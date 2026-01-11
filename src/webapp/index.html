@@ -15,7 +15,7 @@
   <script>eruda.init();</script>
 
   <!-- Vue 3 (Local Build) -->
-  <script src="/vendor/vue.global.prod.js" onerror="document.getElementById('fallback-loader').innerHTML='<div style=\'text-align:center;padding:20px;color:#666\'>Ошибка загрузки. Перезагрузите страницу.</div>'"></script>
+  <script src="/vendor/vue.global.prod.js?v=5" onerror="document.getElementById('fallback-loader').innerHTML='<div style=\'text-align:center;padding:20px;color:#666\'>Ошибка загрузки. Перезагрузите страницу.</div>'"></script>
 
   <!-- Inline SVG Icons (replaces Lucide CDN) -->
   <script>
@@ -472,7 +472,7 @@
   </div>
 
   <script>debugLog('Before main.js');</script>
-  <script src="/main.js" onerror="debugLog('ERROR: main.js failed to load')"></script>
+  <script src="/main.js?v=5" onerror="debugLog('ERROR: main.js failed to load')"></script>
   <script>debugLog('After main.js tag');</script>
 </body>
 
