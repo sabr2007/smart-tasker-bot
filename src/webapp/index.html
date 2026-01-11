@@ -467,7 +467,9 @@
 
   </div>
 
-  <script src="/main.js"></script>
+  <script>debugLog('Before main.js');</script>
+  <script src="/main.js" onerror="debugLog('ERROR: main.js failed to load')"></script>
+  <script>debugLog('After main.js tag');</script>
 </body>
 
 </html>
