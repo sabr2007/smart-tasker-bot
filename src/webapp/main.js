@@ -11,7 +11,7 @@ const App = {
   setup() {
     log('setup() called');
     // --- Config ---
-    const tg = window.Telegram?.WebApp;
+    const tg = window.Telegram && window.Telegram.WebApp;
 
     // Popular timezones (shown first)
     const POPULAR_TIMEZONES = [
@@ -104,7 +104,7 @@ const App = {
         if (tg) {
           tg.ready();
           log('tg.ready() called');
-          tg.expand?.();
+          if (tg.expand) tg.expand();
           log('tg.expand() called');
 
           // Setup Back Button (with safety check for mobile WebView)
@@ -161,9 +161,9 @@ const App = {
       if (!tg || !tg.BackButton) return;
       try {
         if (sOpen || setOpen || tzOpen || hlpOpen || arcOpen) {
-          tg.BackButton.show?.();
+          if (tg.BackButton.show) tg.BackButton.show();
         } else {
-          tg.BackButton.hide?.();
+          if (tg.BackButton.hide) tg.BackButton.hide();
         }
       } catch (e) {
         console.warn('BackButton error:', e);
@@ -386,10 +386,10 @@ const App = {
 
     // API Wrapper
     async function apiFetch(path, opts = {}) {
-      const initData = tg?.initData || localStorage.getItem('tma_init_data_v1') || '';
+      const initData = (tg && tg.initData) || localStorage.getItem('tma_init_data_v1') || '';
 
       // Cache initData if valid
-      if (tg?.initData) localStorage.setItem('tma_init_data_v1', tg.initData);
+      if (tg && tg.initData) localStorage.setItem('tma_init_data_v1', tg.initData);
 
       if (!initData) {
         console.warn("No initData found");
@@ -405,7 +405,7 @@ const App = {
         if (res.status === 204) return null;
         return await res.json();
       } catch (e) {
-        if (tg?.showAlert) tg.showAlert(e.message);
+        if (tg && tg.showAlert) tg.showAlert(e.message);
         else alert(e.message);
         throw e;
       }
@@ -582,7 +582,7 @@ const App = {
 
     function initReschedule() {
       sheet.mode = 'reschedule';
-      if (!editForm.date && sheet.task?.due_at) {
+      if (!editForm.date && sheet.task && sheet.task.due_at) {
         editForm.date = sheet.task.due_at.slice(0, 16);
       }
     }
