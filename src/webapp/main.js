@@ -226,29 +226,37 @@ const App = {
     });
 
     // Progress bar for today's tasks
-    const todayStats = computed(() => {
-      const tz = userTimezone.value || 'Asia/Almaty';
-      const todayKey = getDateKeyInTz(new Date(), tz);
-      const nowMs = Date.now();
+    const todayStats = computed(function() {
+      try {
+        var tz = userTimezone.value || 'Asia/Almaty';
+        var todayKey = getDateKeyInTz(new Date(), tz);
+        var nowMs = Date.now();
 
-      let total = 0;
-      let completed = 0;
+        var total = 0;
+        var completed = 0;
 
-      tasks.value.forEach(t => {
-        // Count tasks that are for today (due today or completed today)
-        const dueMs = t.due_at ? Date.parse(t.due_at) : null;
-        const isOverdue = dueMs && dueMs < nowMs;
-        const isDueToday = dueMs && getDateKeyInTz(new Date(dueMs), tz) === todayKey;
-        const completedToday = t.completed_at && getDateKeyInTz(new Date(t.completed_at), tz) === todayKey;
+        if (tasks.value && tasks.value.length) {
+          for (var i = 0; i < tasks.value.length; i++) {
+            var t = tasks.value[i];
+            // Count tasks that are for today (due today or completed today)
+            var dueMs = t.due_at ? Date.parse(t.due_at) : null;
+            var isOverdue = dueMs && dueMs < nowMs;
+            var isDueToday = dueMs && getDateKeyInTz(new Date(dueMs), tz) === todayKey;
+            var completedToday = t.completed_at && getDateKeyInTz(new Date(t.completed_at), tz) === todayKey;
 
-        if (isDueToday || isOverdue || completedToday) {
-          total++;
-          if (t.completed_at) completed++;
+            if (isDueToday || isOverdue || completedToday) {
+              total++;
+              if (t.completed_at) completed++;
+            }
+          }
         }
-      });
 
-      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
-      return { total, completed, percent };
+        var percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+        return { total: total, completed: completed, percent: percent };
+      } catch (e) {
+        log('todayStats error: ' + e.message);
+        return { total: 0, completed: 0, percent: 0 };
+      }
     });
 
     // Filtered timezones based on search
