@@ -1,11 +1,30 @@
-// Debug helper
-const log = (msg) => { if (window.debugLog) window.debugLog(msg); else console.log(msg); };
+// Debug helper (ES5 compatible)
+function log(msg) {
+  if (window.debugLog) window.debugLog(msg);
+  else console.log(msg);
+}
 
 log('main.js loaded');
 
-const { createApp, ref, computed, reactive, onMounted, watch, nextTick, onUpdated } = Vue;
+// Check if Vue loaded
+if (typeof Vue === 'undefined') {
+  log('ERROR: Vue is undefined!');
+  throw new Error('Vue not loaded');
+}
 
-log('Vue destructured');
+log('Vue exists: ' + typeof Vue);
+
+// ES5 compatible - no destructuring
+var createApp = Vue.createApp;
+var ref = Vue.ref;
+var computed = Vue.computed;
+var reactive = Vue.reactive;
+var onMounted = Vue.onMounted;
+var watch = Vue.watch;
+var nextTick = Vue.nextTick;
+var onUpdated = Vue.onUpdated;
+
+log('Vue methods extracted');
 
 const App = {
   setup() {
