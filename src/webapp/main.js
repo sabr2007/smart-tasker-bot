@@ -88,43 +88,59 @@ const App = {
 
     // --- Telegram Integration ---
     onMounted(async () => {
-      if (tg) {
-        tg.ready();
-        tg.expand?.();
-        // Setup Back Button
-        tg.BackButton.onClick(() => {
-          if (sheet.open) {
-            closeSheet();
-          } else if (helpOpen.value) {
-            helpOpen.value = false;
-          } else if (timezoneOpen.value) {
-            timezoneOpen.value = false;
-            timezoneSearch.value = '';
-          } else if (archiveOpen.value) {
-            archiveOpen.value = false;
-          } else if (settingsOpen.value) {
-            settingsOpen.value = false;
+      // Hide fallback loader once Vue is mounted
+      const fallbackLoader = document.getElementById('fallback-loader');
+      if (fallbackLoader) fallbackLoader.style.display = 'none';
+
+      try {
+        if (tg) {
+          tg.ready();
+          tg.expand?.();
+          // Setup Back Button (with safety check for mobile WebView)
+          if (tg.BackButton && typeof tg.BackButton.onClick === 'function') {
+            tg.BackButton.onClick(() => {
+              if (sheet.open) {
+                closeSheet();
+              } else if (helpOpen.value) {
+                helpOpen.value = false;
+              } else if (timezoneOpen.value) {
+                timezoneOpen.value = false;
+                timezoneSearch.value = '';
+              } else if (archiveOpen.value) {
+                archiveOpen.value = false;
+              } else if (settingsOpen.value) {
+                settingsOpen.value = false;
+              }
+            });
           }
-        });
+        }
+
+        // Load user settings first (for timezone)
+        await loadUserSettings();
+
+        // Then load tasks
+        await loadTasks();
+
+        // Init Lucide icons
+        nextTick(() => lucide.createIcons());
+      } catch (e) {
+        console.error('App initialization error:', e);
+        // Ensure loading is set to false even on error
+        loading.value = false;
       }
-
-      // Load user settings first (for timezone)
-      await loadUserSettings();
-
-      // Then load tasks
-      loadTasks();
-
-      // Init Lucide icons
-      nextTick(() => lucide.createIcons());
     });
 
     // Update BackButton visibility based on state
     watch([() => sheet.open, settingsOpen, timezoneOpen, helpOpen, archiveOpen], ([sOpen, setOpen, tzOpen, hlpOpen, arcOpen]) => {
-      if (!tg) return;
-      if (sOpen || setOpen || tzOpen || hlpOpen || arcOpen) {
-        tg.BackButton.show();
-      } else {
-        tg.BackButton.hide();
+      if (!tg || !tg.BackButton) return;
+      try {
+        if (sOpen || setOpen || tzOpen || hlpOpen || arcOpen) {
+          tg.BackButton.show?.();
+        } else {
+          tg.BackButton.hide?.();
+        }
+      } catch (e) {
+        console.warn('BackButton error:', e);
       }
     });
 

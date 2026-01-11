@@ -11,7 +11,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <!-- Vue 3 (Local Build) -->
-  <script src="/vendor/vue.global.prod.js"></script>
+  <script src="/vendor/vue.global.prod.js" onerror="document.getElementById('fallback-loader').innerHTML='<div style=\'text-align:center;padding:20px;color:#666\'>Ошибка загрузки. Перезагрузите страницу.</div>'"></script>
 
   <!-- Inline SVG Icons (replaces Lucide CDN) -->
   <script>
@@ -67,6 +67,12 @@
 </head>
 
 <body>
+  <!-- Fallback loader (visible until Vue mounts) -->
+  <div id="fallback-loader" style="display: flex; height: 100vh; align-items: center; justify-content: center; background: var(--tg-theme-bg-color, #fff);">
+    <div style="width: 24px; height: 24px; border: 3px solid #ccc; border-top-color: #3390ec; border-radius: 50%; animation: spin .8s linear infinite;"></div>
+  </div>
+  <style>#fallback-loader { position: fixed; inset: 0; z-index: 9999; } @keyframes spin { to { transform: rotate(360deg); } }</style>
+
   <div id="app" v-cloak>
     <!-- Screen: Main App -->
     <div class="app" v-if="!loading">
