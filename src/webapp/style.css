@@ -7,7 +7,7 @@
   --tg-theme-button-text-color: #ffffff;
   --tg-theme-destructive-text-color: #ff3b30;
   --tg-theme-header-bg-color: #ffffff;
-  --tabbar-height: 60px;
+  --tabbar-height: 56px;
 }
 
 [v-cloak] {
@@ -266,14 +266,14 @@ body,
   left: 0;
   width: 100%;
   height: var(--tabbar-height);
-  background-color: var(--tg-theme-secondary-bg-color);
-  border-top: 1px solid var(--tg-theme-hint-color);
-  /* subtle separator */
+  background-color: var(--tg-theme-bg-color);
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
   display: flex;
   justify-content: space-around;
   align-items: center;
   z-index: 1000;
   padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: content-box;
 }
 
 .tab-btn {
