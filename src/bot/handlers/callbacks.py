@@ -14,7 +14,6 @@ from telegram.ext import ContextTypes
 import db
 from bot.jobs import cancel_task_reminder, schedule_task_reminder
 from bot.keyboards import snooze_choice_keyboard
-from bot.services import send_tasks_list
 from time_utils import normalize_deadline_to_utc, now_in_tz
 
 
@@ -85,9 +84,6 @@ async def on_mark_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     else:
         await query.edit_message_text("👍 Задача отмечена выполненной.")
-
-    # отправим обновлённый список задач + меню
-    await send_tasks_list(query.message.chat_id, user_id, context)
 
 
 
